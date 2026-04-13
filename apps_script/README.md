@@ -116,7 +116,7 @@ The status column will now refresh automatically throughout the day.
    - **Taken** (status=T): players on someone's team — includes the owner team name.
    - **Waivers** (status=W): players on the waiver wire.
    - **Free Agents** (status=FA): players available for immediate pickup.
-2. Reads the `PlayerName` column from each sheet tab.
+2. Reads the `Player` column from each sheet tab.
 3. Matches using normalized names (lowercase, no accents, no Jr./Sr. suffixes)
    — same logic as `draft_tracker.py`.
 4. Writes the status to column B and applies conditional formatting.

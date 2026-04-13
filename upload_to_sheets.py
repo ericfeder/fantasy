@@ -143,9 +143,9 @@ def format_tab(tab_name, num_rows, num_cols):
             'updateSheetProperties': {
                 'properties': {
                     'sheetId': sheet_id,
-                    'gridProperties': {'frozenRowCount': 1},
+                    'gridProperties': {'frozenRowCount': 1, 'frozenColumnCount': 1},
                 },
-                'fields': 'gridProperties.frozenRowCount',
+                'fields': 'gridProperties.frozenRowCount,gridProperties.frozenColumnCount',
             }
         },
         # Bold the header row
@@ -208,6 +208,108 @@ def format_tab(tab_name, num_rows, num_cols):
         print(f"  Formatted {tab_name}")
 
 
+COLUMN_PADDING = {
+    'Player': 0,
+    'Status': 0,
+}
+COLUMN_MIN_WIDTH = {
+    'Status': 150,
+}
+DEFAULT_PADDING = 15
+
+
+def pad_columns(tab_name):
+    """Add padding pixels to each column after auto-resize.
+
+    Uses COLUMN_PADDING for per-column overrides (by header name) and
+    DEFAULT_PADDING for everything else.
+    """
+    sheet_id = get_sheet_id(tab_name)
+    if sheet_id is None:
+        return
+
+    # Read the header row to map column names to indices
+    header_result = subprocess.run(
+        ['gws', 'sheets', 'spreadsheets', 'values', 'get',
+         '--params', json.dumps({
+             'spreadsheetId': SPREADSHEET_ID,
+             'range': f'{tab_name}!1:1',
+         })],
+        capture_output=True, text=True,
+    )
+    if header_result.returncode != 0:
+        return
+    lines = [l for l in header_result.stdout.splitlines()
+             if not l.strip().startswith('Using keyring')]
+    header_data = json.loads('\n'.join(lines))
+    headers = header_data.get('values', [[]])[0]
+    if not headers:
+        return
+
+    num_cols = len(headers)
+    name_padding = {}
+    name_min_width = {}
+    for i, name in enumerate(headers):
+        name_padding[i] = COLUMN_PADDING.get(name, DEFAULT_PADDING)
+        if name in COLUMN_MIN_WIDTH:
+            name_min_width[i] = COLUMN_MIN_WIDTH[name]
+
+    # Fetch current column widths
+    result = subprocess.run(
+        ['gws', 'sheets', 'spreadsheets', 'get',
+         '--params', json.dumps({
+             'spreadsheetId': SPREADSHEET_ID,
+             'fields': 'sheets.properties,sheets.data.columnMetadata',
+         })],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return
+
+    lines = [l for l in result.stdout.splitlines() if not l.strip().startswith('Using keyring')]
+    data = json.loads('\n'.join(lines))
+
+    col_metadata = []
+    for sheet in data.get('sheets', []):
+        if sheet['properties']['title'] == tab_name:
+            col_metadata = sheet.get('data', [{}])[0].get('columnMetadata', [])
+            break
+
+    if not col_metadata:
+        return
+
+    requests = []
+    for i in range(min(num_cols, len(col_metadata))):
+        col_padding = name_padding.get(i, DEFAULT_PADDING)
+        current_width = col_metadata[i].get('pixelSize', 100)
+        new_width = current_width + col_padding
+        if i in name_min_width:
+            new_width = max(new_width, name_min_width[i])
+        requests.append({
+            'updateDimensionProperties': {
+                'range': {
+                    'sheetId': sheet_id,
+                    'dimension': 'COLUMNS',
+                    'startIndex': i,
+                    'endIndex': i + 1,
+                },
+                'properties': {'pixelSize': new_width},
+                'fields': 'pixelSize',
+            }
+        })
+
+    if not requests:
+        return
+
+    subprocess.run(
+        ['gws', 'sheets', 'spreadsheets', 'batchUpdate',
+         '--params', json.dumps({'spreadsheetId': SPREADSHEET_ID}),
+         '--json', json.dumps({'requests': requests})],
+        capture_output=True, text=True,
+    )
+    print(f"  Padded {len(requests)} columns in {tab_name}")
+
+
 def normalize_name(name):
     """Normalize a player name for fuzzy matching."""
     if not isinstance(name, str):
@@ -229,7 +331,7 @@ def read_status_column(tab_name):
         ['gws', 'sheets', 'spreadsheets', 'values', 'get',
          '--params', json.dumps({
              'spreadsheetId': SPREADSHEET_ID,
-             'range': f'{tab_name}!A:B',
+             'range': f'{tab_name}!1:1',
          })],
         capture_output=True, text=True,
     )
@@ -243,14 +345,38 @@ def read_status_column(tab_name):
         return {}
 
     header = rows[0]
-    if len(header) < 2 or header[1] != 'Status':
+    if 'Status' not in header:
+        return {}
+
+    status_idx = header.index('Status')
+    player_idx = header.index('Player') if 'Player' in header else 0
+    player_col = chr(ord('A') + player_idx)
+    status_col = chr(ord('A') + status_idx)
+
+    result = subprocess.run(
+        ['gws', 'sheets', 'spreadsheets', 'values', 'get',
+         '--params', json.dumps({
+             'spreadsheetId': SPREADSHEET_ID,
+             'range': f'{tab_name}!{player_col}:{status_col}',
+         })],
+        capture_output=True, text=True,
+    )
+    if result.returncode != 0:
+        return {}
+    lines = [l for l in result.stdout.splitlines()
+             if not l.strip().startswith('Using keyring')]
+    data = json.loads('\n'.join(lines))
+    rows = data.get('values', [])
+    if not rows:
         return {}
 
     mapping = {}
+    name_offset = 0
+    status_offset = status_idx - player_idx
     for row in rows[1:]:
-        if len(row) < 2:
+        if len(row) <= status_offset:
             continue
-        name, status = row[0], row[1]
+        name, status = row[name_offset], row[status_offset]
         if name and status:
             mapping[normalize_name(name)] = status
 
@@ -266,7 +392,7 @@ def restore_status_column(tab_name, values, status_map):
         return
 
     header = values[0]
-    name_idx = header.index('PlayerName') if 'PlayerName' in header else 0
+    name_idx = header.index('Player') if 'Player' in header else 0
 
     sheet_id = get_sheet_id(tab_name)
     if sheet_id is None:
@@ -305,7 +431,8 @@ def restore_status_column(tab_name, values, status_map):
             )
             print(f"  Cleared {len(delete_requests)} conditional format rules from {tab_name}")
 
-    # Insert a new column at position 2 (after PlayerName in col A)
+    # Insert a new column right after Player
+    insert_idx = name_idx + 1
     insert_result = subprocess.run(
         ['gws', 'sheets', 'spreadsheets', 'batchUpdate',
          '--params', json.dumps({'spreadsheetId': SPREADSHEET_ID}),
@@ -314,8 +441,8 @@ def restore_status_column(tab_name, values, status_map):
                  'range': {
                      'sheetId': sheet_id,
                      'dimension': 'COLUMNS',
-                     'startIndex': 1,
-                     'endIndex': 2,
+                     'startIndex': insert_idx,
+                     'endIndex': insert_idx + 1,
                  },
                  'inheritFromBefore': False,
              }
@@ -339,7 +466,8 @@ def restore_status_column(tab_name, values, status_map):
         status_col.append([status])
 
     # Write the column
-    cell_range = f'{tab_name}!B1:B{len(status_col)}'
+    write_col_letter = chr(ord('A') + insert_idx)
+    cell_range = f'{tab_name}!{write_col_letter}1:{write_col_letter}{len(status_col)}'
     body_json = json.dumps({'values': status_col})
     subprocess.run(
         ['gws', 'sheets', 'spreadsheets', 'values', 'update',
@@ -378,6 +506,8 @@ def upload_all():
 
         # Restore the Status column if it existed
         restore_status_column(tab_name, values, status_map)
+
+        pad_columns(tab_name)
 
     print(f"\nhttps://docs.google.com/spreadsheets/d/{SPREADSHEET_ID}/edit")
 

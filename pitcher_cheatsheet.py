@@ -3,6 +3,8 @@ import requests
 import os
 import re
 import unicodedata
+from datetime import date, timedelta
+from collections import defaultdict
 
 
 PROJECTION_DIR = 'data/2026/projections'
@@ -58,7 +60,7 @@ def fetch_eno_rankings(force_download=True):
     should_download = force_download or not os.path.exists(ENO_CACHE_PATH)
 
     if should_download:
-        url = "https://docs.google.com/spreadsheets/d/1daR9RNic3GcfDb6FLsm2OZRBS8VkqucOqHSnIS7ru5c/export?format=csv&gid=543684644"
+        url = "https://docs.google.com/spreadsheets/d/1daR9RNic3GcfDb6FLsm2OZRBS8VkqucOqHSnIS7ru5c/export?format=csv&gid=1693048986"
         try:
             response = requests.get(url)
             response.raise_for_status()
@@ -126,6 +128,117 @@ def fetch_eno_rankings(force_download=True):
         return None
 
 
+def fetch_probable_starters():
+    """Fetch probable starter grid from FanGraphs API.
+
+    Returns {fg_player_id_str: [(date_obj, opp_abbrev, is_home), ...]}
+    """
+    url = "https://www.fangraphs.com/api/roster-resource/probables-grid/data"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                       'AppleWebKit/537.36 (KHTML, like Gecko) '
+                       'Chrome/120.0.0.0 Safari/537.36',
+        'Accept': 'application/json',
+    }
+    try:
+        resp = requests.get(url, headers=headers, timeout=15)
+        resp.raise_for_status()
+        records = resp.json()
+        print(f"Fetched {len(records)} probable-starter records from FanGraphs")
+    except Exception as e:
+        print(f"Error fetching probable starters: {e}")
+        return {}
+
+    today = date.today()
+    starters = defaultdict(list)
+    for rec in records:
+        pid = rec.get('teamSPPlayerId')
+        if not pid:
+            continue
+        game_date = date.fromisoformat(rec['GameDate'][:10])
+        if game_date < today:
+            continue
+        opp = rec.get('OpponentAbbName', '?')
+        is_home = bool(rec.get('isHome'))
+        starters[str(pid)].append((game_date, opp, is_home))
+
+    for pid in starters:
+        starters[pid].sort(key=lambda x: x[0])
+
+    print(f"Parsed probable starters for {len(starters)} pitchers")
+    return dict(starters)
+
+
+def _format_matchup(opp, is_home):
+    return f"vs {opp}" if is_home else f"@ {opp}"
+
+
+DAY_ABBREV = ['Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat', 'Sun']
+
+
+def add_schedule_columns(merged, starters):
+    """Add the 5 probable-start columns to the merged DataFrame."""
+    today = date.today()
+    tomorrow = today + timedelta(days=1)
+    day_after = today + timedelta(days=2)
+
+    # This fantasy week: Monday through Sunday containing today
+    days_since_monday = today.weekday()  # 0=Mon
+    this_week_start = today - timedelta(days=days_since_monday)
+    this_week_end = this_week_start + timedelta(days=6)
+
+    next_week_start = this_week_end + timedelta(days=1)
+    next_week_end = next_week_start + timedelta(days=6)
+
+    col_today = []
+    col_tomorrow = []
+    col_day_after = []
+    col_this_week = []
+    col_next_week = []
+
+    for _, row in merged.iterrows():
+        raw_pid = row.get('playerid')
+        if pd.notna(raw_pid):
+            pid = str(int(raw_pid)) if isinstance(raw_pid, float) and raw_pid == int(raw_pid) else str(raw_pid)
+        else:
+            pid = ''
+        starts = starters.get(pid, [])
+
+        val_today = ''
+        val_tomorrow = ''
+        val_day_after = ''
+        parts_this_week = []
+        parts_next_week = []
+
+        for game_date, opp, is_home in starts:
+            matchup = _format_matchup(opp, is_home)
+            if game_date == today:
+                val_today = matchup
+            if game_date == tomorrow:
+                val_tomorrow = matchup
+            if game_date == day_after:
+                val_day_after = matchup
+            if this_week_start <= game_date <= this_week_end:
+                day_name = DAY_ABBREV[game_date.weekday()]
+                parts_this_week.append(f"{day_name} {matchup}")
+            if next_week_start <= game_date <= next_week_end:
+                day_name = DAY_ABBREV[game_date.weekday()]
+                parts_next_week.append(f"{day_name} {matchup}")
+
+        col_today.append(val_today)
+        col_tomorrow.append(val_tomorrow)
+        col_day_after.append(val_day_after)
+        col_this_week.append(', '.join(parts_this_week))
+        col_next_week.append(', '.join(parts_next_week))
+
+    merged['start_today'] = col_today
+    merged['start_tomorrow'] = col_tomorrow
+    merged['start_day_after'] = col_day_after
+    merged['starts_this_week'] = col_this_week
+    merged['starts_next_week'] = col_next_week
+    return merged
+
+
 def create_pitcher_cheatsheet():
     ensure_directories()
 
@@ -134,7 +247,7 @@ def create_pitcher_cheatsheet():
         df = load_pitching_projections(source)
         if df is not None:
             df = calculate_fantasy_points(df)
-            df = df[['PlayerName', 'Team', 'xMLBAMID', 'G', 'GS', 'IP', 'FantasyPoints']].copy()
+            df = df[['PlayerName', 'Team', 'xMLBAMID', 'playerid', 'G', 'GS', 'IP', 'FantasyPoints']].copy()
             df['FantasyPoints'] = df['FantasyPoints'].round().astype(int)
             df['IP'] = df['IP'].round().astype(int)
             df = df.rename(columns={
@@ -156,7 +269,7 @@ def create_pitcher_cheatsheet():
             merged = pd.merge(
                 merged,
                 projections[source],
-                on=['PlayerName', 'Team', 'xMLBAMID'],
+                on=['PlayerName', 'Team', 'xMLBAMID', 'playerid'],
                 how='outer'
             )
 
@@ -164,21 +277,31 @@ def create_pitcher_cheatsheet():
     point_cols = [f'{s}_points' for s in SOURCES if s in projections]
     ip_cols = [f'{s}_ip' for s in SOURCES if s in projections]
     games_cols = [f'{s}_games' for s in SOURCES if s in projections]
+    starts_cols = [f'{s}_starts' for s in SOURCES if s in projections]
 
-    for col in point_cols + ip_cols + games_cols:
+    for col in point_cols + ip_cols + games_cols + starts_cols:
         merged[col] = merged[col].fillna(0).round().astype(int)
 
-    # Points per IP for each source
+    # Points per game and formatted games column for each source
     for source in SOURCES:
         pts_col = f'{source}_points'
-        ip_col = f'{source}_ip'
-        ppip_col = f'{source}_ppip'
-        if pts_col in merged.columns and ip_col in merged.columns:
-            merged[ppip_col] = 0.0
-            valid = merged[ip_col] > 0
-            merged.loc[valid, ppip_col] = (
-                merged.loc[valid, pts_col] / merged.loc[valid, ip_col]
-            ).round(2)
+        games_col = f'{source}_games'
+        starts_col = f'{source}_starts'
+        ppg_col = f'{source}_ppg'
+        gf_col = f'{source}_g'
+        if pts_col in merged.columns and games_col in merged.columns:
+            merged[ppg_col] = 0.0
+            valid = merged[games_col] > 0
+            merged.loc[valid, ppg_col] = (
+                merged.loc[valid, pts_col] / merged.loc[valid, games_col]
+            ).round(1)
+        if games_col in merged.columns and starts_col in merged.columns:
+            merged[gf_col] = merged.apply(
+                lambda r: f"{r[games_col]} ({r[starts_col]} GS)"
+                if r[games_col] != r[starts_col]
+                else str(r[games_col]),
+                axis=1,
+            )
 
     # Sort by THE BAT X points (primary sort)
     merged = merged.sort_values('thebatx_points', ascending=False).reset_index(drop=True)
@@ -195,17 +318,52 @@ def create_pitcher_cheatsheet():
         if 'mlbam_id' in merged.columns:
             merged = merged.drop(columns=['mlbam_id'])
 
+    # Add probable starter schedule columns
+    starters = fetch_probable_starters()
+    merged = add_schedule_columns(merged, starters)
+
     # Build final column order
     out_cols = [
-        'PlayerName', 'eno_rank', 'eno_proj_ip',
-        'thebatx_points', 'thebatx_ppip', 'thebatx_ip',
-        'oopsy_points', 'oopsy_ppip', 'oopsy_ip',
+        'PlayerName',
+        'start_today', 'start_tomorrow', 'start_day_after',
+        'starts_this_week', 'starts_next_week',
+        'thebatx_ppg', 'oopsy_ppg', 'thebatx_g',
+        'eno_rank',
     ]
     out_cols = [c for c in out_cols if c in merged.columns]
     merged = merged[out_cols]
 
     # Sort by eno_rank (pitchers without an Eno rank go to the bottom)
     merged = merged.sort_values('eno_rank', ascending=True, na_position='last').reset_index(drop=True)
+
+    # Compute week date ranges for column headers
+    today = date.today()
+    days_since_monday = today.weekday()
+    this_week_start = today - timedelta(days=days_since_monday)
+    this_week_end = this_week_start + timedelta(days=6)
+    next_week_start = this_week_end + timedelta(days=1)
+    next_week_end = next_week_start + timedelta(days=6)
+    tomorrow = today + timedelta(days=1)
+    day_after = today + timedelta(days=2)
+    today_label     = f"{today.strftime('%-m/%-d')} ({DAY_ABBREV[today.weekday()]})"
+    tomorrow_label  = f"{tomorrow.strftime('%-m/%-d')} ({DAY_ABBREV[tomorrow.weekday()]})"
+    day_after_label = f"{day_after.strftime('%-m/%-d')} ({DAY_ABBREV[day_after.weekday()]})"
+    this_week_label = f"{this_week_start.strftime('%-m/%-d')}-{this_week_end.strftime('%-m/%-d')}"
+    next_week_label = f"{next_week_start.strftime('%-m/%-d')}-{next_week_end.strftime('%-m/%-d')}"
+
+    # Rename columns to human-friendly headers before saving
+    merged = merged.rename(columns={
+        'PlayerName':       'Player',
+        'start_today':      today_label,
+        'start_tomorrow':   tomorrow_label,
+        'start_day_after':  day_after_label,
+        'starts_this_week': this_week_label,
+        'starts_next_week': next_week_label,
+        'eno_rank':         'Eno #',
+        'thebatx_ppg':      'THE BAT X',
+        'thebatx_g':        'Proj. G',
+        'oopsy_ppg':        'OOPSY',
+    })
 
     output_file = f"{OUTPUT_DIR}/pitcher_cheatsheet.csv"
     merged.to_csv(output_file, index=False)

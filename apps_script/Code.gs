@@ -39,7 +39,7 @@ function updateOwnershipStatus() {
   Logger.log('My team: ' + myTeamName);
 
   var takenMap = {};    // normalizedName -> team name
-  var waiverSet = {};   // normalizedName -> true
+  var waiverMap = {};   // normalizedName -> waiver date string or true
 
   // Fetch rostered players (includes owner team name)
   var taken = fetchAllYahooPlayers_(leagueKey, YAHOO_STATUS.TAKEN);
@@ -51,9 +51,9 @@ function updateOwnershipStatus() {
   // Fetch waiver players
   var waivers = fetchAllYahooPlayers_(leagueKey, YAHOO_STATUS.WAIVERS);
   waivers.forEach(function (p) {
-    waiverSet[normalizeName(p.name)] = true;
+    waiverMap[normalizeName(p.name)] = p.waiverDate || true;
   });
-  Logger.log('Waiver players: ' + Object.keys(waiverSet).length);
+  Logger.log('Waiver players: ' + Object.keys(waiverMap).length);
 
   // Anyone not rostered or on waivers is assumed to be a free agent —
   // skip fetching the full FA pool (thousands of pages) to stay well
@@ -67,7 +67,7 @@ function updateOwnershipStatus() {
       Logger.log('Tab not found: ' + tabName + ', skipping.');
       return;
     }
-    writeStatusColumn_(sheet, takenMap, waiverSet, myTeamName);
+    writeStatusColumn_(sheet, takenMap, waiverMap, myTeamName);
   });
 
   Logger.log('Ownership update complete.');
@@ -193,6 +193,7 @@ function parseYahooPlayer_(playerArray) {
   var name = '';
   var playerId = '';
   var ownerTeam = '';
+  var waiverDate = '';
 
   for (var i = 0; i < infoArray.length; i++) {
     var item = infoArray[i];
@@ -204,19 +205,28 @@ function parseYahooPlayer_(playerArray) {
     }
     if (item.ownership) {
       ownerTeam = item.ownership.owner_team_name || '';
+      if (item.ownership.waiver_date) {
+        waiverDate = item.ownership.waiver_date;
+      }
+    }
+    if (item.transaction_data && item.transaction_data.source_team_name) {
+      ownerTeam = ownerTeam || item.transaction_data.source_team_name;
     }
   }
 
   // Ownership may also be at playerArray[1]
-  if (!ownerTeam && playerArray.length > 1 && playerArray[1]) {
+  if (playerArray.length > 1 && playerArray[1]) {
     var ownership = playerArray[1].ownership;
     if (ownership) {
-      ownerTeam = ownership.owner_team_name || '';
+      if (!ownerTeam) ownerTeam = ownership.owner_team_name || '';
+      if (!waiverDate && ownership.waiver_date) {
+        waiverDate = ownership.waiver_date;
+      }
     }
   }
 
   if (!name) return null;
-  return { name: name, playerId: playerId, ownerTeam: ownerTeam };
+  return { name: name, playerId: playerId, ownerTeam: ownerTeam, waiverDate: waiverDate };
 }
 
 // ---------------------------------------------------------------------------
@@ -226,29 +236,28 @@ function parseYahooPlayer_(playerArray) {
 /**
  * Read the sheet, find or create the Status column, and populate it.
  */
-function writeStatusColumn_(sheet, takenMap, waiverSet, myTeamName) {
+function writeStatusColumn_(sheet, takenMap, waiverMap, myTeamName) {
   var tabName = sheet.getName();
   var data = sheet.getDataRange().getValues();
   if (data.length < 2) return;
 
   var header = data[0];
-  var nameColIdx = header.indexOf('PlayerName');
+  var nameColIdx = header.indexOf('Player');
   if (nameColIdx === -1) {
-    Logger.log(tabName + ': no PlayerName column found, skipping.');
+    Logger.log(tabName + ': no Player column found, skipping.');
     return;
   }
 
-  // Find or create the Status column (always column B, index 1)
+  // Find or create the Status column (right after Player)
   var statusColIdx = header.indexOf(STATUS_COL_HEADER);
   if (statusColIdx === -1) {
-    // Insert a new column at position 2 (after PlayerName which is col A)
-    sheet.insertColumnAfter(1);
-    statusColIdx = 1;
+    var insertAfter = nameColIdx + 1; // 1-based column number
+    sheet.insertColumnAfter(insertAfter);
+    statusColIdx = nameColIdx + 1;
     sheet.getRange(1, statusColIdx + 1).setValue(STATUS_COL_HEADER);
-    // Re-read data after inserting column
     data = sheet.getDataRange().getValues();
     header = data[0];
-    nameColIdx = header.indexOf('PlayerName');
+    nameColIdx = header.indexOf('Player');
   }
 
   var statuses = [];
@@ -265,8 +274,14 @@ function writeStatusColumn_(sheet, takenMap, waiverSet, myTeamName) {
     } else if (takenMap[norm]) {
       status = takenMap[norm];
       matched++;
-    } else if (waiverSet[norm]) {
-      status = 'Waivers';
+    } else if (waiverMap[norm]) {
+      var wd = waiverMap[norm];
+      if (typeof wd === 'string' && wd) {
+        var parts = wd.split('-');
+        status = 'Waivers (' + parseInt(parts[1], 10) + '/' + parseInt(parts[2], 10) + ')';
+      } else {
+        status = 'Waivers';
+      }
       matched++;
     } else if (playerName) {
       status = 'FA';
@@ -293,48 +308,61 @@ function writeStatusColumn_(sheet, takenMap, waiverSet, myTeamName) {
  *   - Team names (rostered) -> light grey text
  */
 function applyStatusFormatting_(sheet, statusColIdx, numRows) {
-  var range = sheet.getRange(2, statusColIdx + 1, numRows - 1, 1);
+  var statusRange = sheet.getRange(2, statusColIdx + 1, numRows - 1, 1);
+  var header = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
+  var playerColIdx = header.indexOf('Player');
 
-  // Clear existing conditional format rules on this range first
+  // Apply formatting to both Status and Player columns
+  var ranges = [statusRange];
+  if (playerColIdx !== -1) {
+    ranges.push(sheet.getRange(2, playerColIdx + 1, numRows - 1, 1));
+  }
+
+  // Status column letter for formula references (e.g. "B")
+  var statusColLetter = String.fromCharCode(65 + statusColIdx);
+
+  // Clear existing conditional format rules on these columns
   var rules = sheet.getConditionalFormatRules();
+  var affectedCols = {};
+  affectedCols[statusColIdx + 1] = true;
+  if (playerColIdx !== -1) affectedCols[playerColIdx + 1] = true;
   var newRules = rules.filter(function (rule) {
-    var ranges = rule.getRanges();
-    for (var i = 0; i < ranges.length; i++) {
-      if (ranges[i].getColumn() === statusColIdx + 1) return false;
+    var ruleRanges = rule.getRanges();
+    for (var i = 0; i < ruleRanges.length; i++) {
+      if (affectedCols[ruleRanges[i].getColumn()]) return false;
     }
     return true;
   });
 
   var myTeamRule = SpreadsheetApp.newConditionalFormatRule()
-    .whenTextEqualTo('My Team')
+    .whenFormulaSatisfied('=$' + statusColLetter + '2="My Team"')
     .setBackground('#c9daf8')
-    .setRanges([range])
+    .setRanges(ranges)
     .build();
 
   var faRule = SpreadsheetApp.newConditionalFormatRule()
-    .whenTextEqualTo('FA')
+    .whenFormulaSatisfied('=$' + statusColLetter + '2="FA"')
     .setBackground('#d9ead3')
-    .setRanges([range])
+    .setRanges(ranges)
     .build();
 
   var waiverRule = SpreadsheetApp.newConditionalFormatRule()
-    .whenTextEqualTo('Waivers')
+    .whenFormulaSatisfied('=LEFT($' + statusColLetter + '2,7)="Waivers"')
     .setBackground('#fce5cd')
-    .setRanges([range])
+    .setRanges(ranges)
     .build();
 
-  // Rostered by another team = anything not matching the above
   var rosteredRule = SpreadsheetApp.newConditionalFormatRule()
     .whenFormulaSatisfied(
       '=AND(' +
-        'LEN(INDIRECT("RC",FALSE))>0,' +
-        'INDIRECT("RC",FALSE)<>"FA",' +
-        'INDIRECT("RC",FALSE)<>"Waivers",' +
-        'INDIRECT("RC",FALSE)<>"My Team"' +
+        'LEN($' + statusColLetter + '2)>0,' +
+        '$' + statusColLetter + '2<>"FA",' +
+        'LEFT($' + statusColLetter + '2,7)<>"Waivers",' +
+        '$' + statusColLetter + '2<>"My Team"' +
       ')'
     )
     .setFontColor('#999999')
-    .setRanges([range])
+    .setRanges(ranges)
     .build();
 
   newRules.push(myTeamRule);

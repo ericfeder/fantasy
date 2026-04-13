@@ -214,6 +214,12 @@ def create_batter_cheatsheet():
     for col in games_columns:
         merged_df[col] = merged_df[col].fillna(0).round().astype(int)
     
+    # Filter out players with fewer than 10 projected games in every system
+    max_games = merged_df[games_columns].max(axis=1)
+    before = len(merged_df)
+    merged_df = merged_df[max_games >= 10].reset_index(drop=True)
+    print(f"Filtered out {before - len(merged_df)} players with <10 projected games")
+    
     # Calculate points per game for each projection system
     for source in sources:
         points_col = f'{source}_points'
@@ -266,17 +272,26 @@ def create_batter_cheatsheet():
     # Drop the normalized name column as it's no longer needed
     merged_df = merged_df.drop(columns=['NormalizedName'])
     
-    # Select and reorder columns: ATC first, then OOPSY
+    # Select and reorder columns
     final_columns = [
         'PlayerName', 'YahooPositions',
-        'atc_points', 'atc_ppg', 'atc_games',
-        'oopsy_points', 'oopsy_ppg', 'oopsy_games',
+        'atc_points', 'oopsy_points', 'atc_ppg', 'oopsy_ppg',
     ]
     merged_df = merged_df[final_columns]
     
     # Sort by RoS ATC points
     merged_df = merged_df.sort_values('atc_points', ascending=False)
     
+    # Rename columns to human-friendly headers before saving
+    merged_df = merged_df.rename(columns={
+        'PlayerName':    'Player',
+        'YahooPositions': 'Position',
+        'atc_points':    'ATC Pts',
+        'oopsy_points':  'OOPSY Pts',
+        'atc_ppg':       'ATC Pts/G',
+        'oopsy_ppg':     'OOPSY Pts/G',
+    })
+
     # Save to CSV
     output_file = "data/output/batter_cheatsheet.csv"
     merged_df.to_csv(output_file, index=False)
@@ -287,19 +302,19 @@ def create_batter_cheatsheet():
     print(merged_df.head(10))
     
     # Print stats on position matching
-    positions_filled = (merged_df['YahooPositions'] != '').sum()
+    positions_filled = (merged_df['Position'] != '').sum()
     print(f"\nPosition matching stats:")
     print(f"Players with positions: {positions_filled} out of {len(merged_df)} ({positions_filled/len(merged_df)*100:.1f}%)")
     
     # Print players with accent marks who don't have positions
     accent_players = merged_df[
-        (merged_df['YahooPositions'] == '') & 
-        (merged_df['PlayerName'].str.contains('[áéíóúüñÁÉÍÓÚÜÑ]'))
+        (merged_df['Position'] == '') & 
+        (merged_df['Player'].str.contains('[áéíóúüñÁÉÍÓÚÜÑ]'))
     ]
     if not accent_players.empty:
         print("\nPlayers with accent marks who don't have positions:")
         for idx, row in accent_players.iterrows():
-            print(f"{row['PlayerName']}")
+            print(f"{row['Player']}")
 
 def standardize_positions(positions):
     """
