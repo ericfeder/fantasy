@@ -32,11 +32,11 @@ function updateOwnershipStatus() {
     );
   }
 
-  Logger.log('Fetching ownership data for league: ' + leagueKey);
+  console.log('Fetching ownership data for league: ' + leagueKey);
 
   // Discover the logged-in user's team name
   var myTeamName = getMyTeamName_(leagueKey);
-  Logger.log('My team: ' + myTeamName);
+  console.log('My team: ' + myTeamName);
 
   var takenMap = {};    // normalizedName -> team name
   var waiverMap = {};   // normalizedName -> waiver date string or true
@@ -46,14 +46,14 @@ function updateOwnershipStatus() {
   taken.forEach(function (p) {
     takenMap[normalizeName(p.name)] = p.ownerTeam || 'Rostered';
   });
-  Logger.log('Rostered players: ' + Object.keys(takenMap).length);
+  console.log('Rostered players: ' + Object.keys(takenMap).length);
 
   // Fetch waiver players
   var waivers = fetchAllYahooPlayers_(leagueKey, YAHOO_STATUS.WAIVERS);
   waivers.forEach(function (p) {
     waiverMap[normalizeName(p.name)] = p.waiverDate || true;
   });
-  Logger.log('Waiver players: ' + Object.keys(waiverMap).length);
+  console.log('Waiver players: ' + Object.keys(waiverMap).length);
 
   // Anyone not rostered or on waivers is assumed to be a free agent —
   // skip fetching the full FA pool (thousands of pages) to stay well
@@ -64,13 +64,13 @@ function updateOwnershipStatus() {
   TAB_NAMES.forEach(function (tabName) {
     var sheet = ss.getSheetByName(tabName);
     if (!sheet) {
-      Logger.log('Tab not found: ' + tabName + ', skipping.');
+      console.log('Tab not found: ' + tabName + ', skipping.');
       return;
     }
     writeStatusColumn_(sheet, takenMap, waiverMap, myTeamName);
   });
 
-  Logger.log('Ownership update complete.');
+  console.log('Ownership update complete.');
 }
 
 /**
@@ -155,7 +155,7 @@ function fetchAllYahooPlayers_(leagueKey, status) {
     if (code !== 200) {
       // Yahoo returns 400 when start is beyond total players
       if (code === 400 && start > 0) break;
-      Logger.log('Yahoo API error (' + code + '): ' + response.getContentText().substring(0, 500));
+      console.log('Yahoo API error (' + code + '): ' + response.getContentText().substring(0, 500));
       break;
     }
 
@@ -244,7 +244,7 @@ function writeStatusColumn_(sheet, takenMap, waiverMap, myTeamName) {
   var header = data[0];
   var nameColIdx = header.indexOf('Player');
   if (nameColIdx === -1) {
-    Logger.log(tabName + ': no Player column found, skipping.');
+    console.log(tabName + ': no Player column found, skipping.');
     return;
   }
 
@@ -298,7 +298,7 @@ function writeStatusColumn_(sheet, takenMap, waiverMap, myTeamName) {
   // Apply conditional formatting
   applyStatusFormatting_(sheet, statusColIdx, data.length);
 
-  Logger.log(tabName + ': ' + matched + '/' + (data.length - 1) + ' players tagged.');
+  console.log(tabName + ': ' + matched + '/' + (data.length - 1) + ' players tagged.');
 }
 
 /**
