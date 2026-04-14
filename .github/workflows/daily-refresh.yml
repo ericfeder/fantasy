@@ -26,3 +26,12 @@ jobs:
 
       - name: Run fantasy update pipeline
         run: python update_fantasy.py
+
+      - name: Trigger Apps Script ownership update
+        run: |
+          response=$(curl -s -L -o /dev/null -w '%{http_code}' "${{ secrets.APPS_SCRIPT_WEBHOOK_URL }}")
+          if [ "$response" != "200" ]; then
+            echo "Apps Script webhook returned HTTP $response"
+            exit 1
+          fi
+          echo "Apps Script ownership update triggered successfully"

@@ -409,32 +409,23 @@ function promptLeagueKey() {
 }
 
 // ---------------------------------------------------------------------------
-// Time-driven trigger — run once from the Apps Script editor to install.
-// After that, updateOwnershipStatus fires daily at ~6:35 AM ET automatically.
-// ---------------------------------------------------------------------------
-
-function createDailyTrigger() {
-  // Remove any existing trigger for the same function to avoid duplicates
-  ScriptApp.getProjectTriggers().forEach(function(t) {
-    if (t.getHandlerFunction() === 'updateOwnershipStatus') {
-      ScriptApp.deleteTrigger(t);
-    }
-  });
-  ScriptApp.newTrigger('updateOwnershipStatus')
-    .timeBased()
-    .atHour(6)
-    .nearMinute(35)
-    .everyDays(1)
-    .inTimezone('America/New_York')
-    .create();
-  Logger.log('Daily trigger created for updateOwnershipStatus at ~6:35 AM ET.');
-}
-
-// ---------------------------------------------------------------------------
 // Web app endpoint — deploy as a web app to trigger updates via URL/bookmark
+// or from GitHub Actions after the daily pipeline.
+//
+// Requires ?token=<WEBHOOK_TOKEN> when access is set to ANYONE.
+// Set the WEBHOOK_TOKEN script property via Project Settings > Script Properties.
 // ---------------------------------------------------------------------------
 
-function doGet() {
+function doGet(e) {
+  var expectedToken = PropertiesService.getScriptProperties().getProperty('WEBHOOK_TOKEN');
+  var providedToken = e && e.parameter && e.parameter.token;
+
+  if (expectedToken && providedToken !== expectedToken) {
+    return HtmlService.createHtmlOutput(
+      '<html><body><h2>Unauthorized</h2></body></html>'
+    ).setTitle('Fantasy Update');
+  }
+
   try {
     updateOwnershipStatus();
     return HtmlService.createHtmlOutput(
