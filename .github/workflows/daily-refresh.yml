@@ -2,8 +2,8 @@ name: Daily Fantasy Refresh
 
 on:
   schedule:
-    # 11:00 UTC = 7:00 AM ET (EDT) / 6:00 AM ET (EST)
-    - cron: '0 11 * * *'
+    # 10:30 UTC = 6:30 AM ET (EDT)
+    - cron: '30 10 * * *'
   workflow_dispatch:
 
 jobs:

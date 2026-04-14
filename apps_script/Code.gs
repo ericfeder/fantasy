@@ -410,7 +410,7 @@ function promptLeagueKey() {
 
 // ---------------------------------------------------------------------------
 // Time-driven trigger — run once from the Apps Script editor to install.
-// After that, updateOwnershipStatus fires daily at ~8 AM ET automatically.
+// After that, updateOwnershipStatus fires daily at ~6:35 AM ET automatically.
 // ---------------------------------------------------------------------------
 
 function createDailyTrigger() {
@@ -422,12 +422,12 @@ function createDailyTrigger() {
   });
   ScriptApp.newTrigger('updateOwnershipStatus')
     .timeBased()
-    .atHour(8)
-    .nearMinute(0)
+    .atHour(6)
+    .nearMinute(35)
     .everyDays(1)
     .inTimezone('America/New_York')
     .create();
-  Logger.log('Daily trigger created for updateOwnershipStatus at ~8 AM ET.');
+  Logger.log('Daily trigger created for updateOwnershipStatus at ~6:35 AM ET.');
 }
 
 // ---------------------------------------------------------------------------
