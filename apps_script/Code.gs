@@ -308,28 +308,18 @@ function writeStatusColumn_(sheet, takenMap, waiverMap, myTeamName) {
  *   - Team names (rostered) -> light grey text
  */
 function applyStatusFormatting_(sheet, statusColIdx, numRows) {
-  var statusRange = sheet.getRange(2, statusColIdx + 1, numRows - 1, 1);
-  var header = sheet.getRange(1, 1, 1, sheet.getLastColumn()).getValues()[0];
-  var playerColIdx = header.indexOf('Player');
-
-  // Apply formatting to both Status and Player columns
-  var ranges = [statusRange];
-  if (playerColIdx !== -1) {
-    ranges.push(sheet.getRange(2, playerColIdx + 1, numRows - 1, 1));
-  }
+  var lastCol = sheet.getLastColumn();
+  var rowRange = sheet.getRange(2, 1, numRows - 1, lastCol);
 
   // Status column letter for formula references (e.g. "B")
   var statusColLetter = String.fromCharCode(65 + statusColIdx);
 
-  // Clear existing conditional format rules on these columns
+  // Clear existing conditional format rules that touch any column in the sheet
   var rules = sheet.getConditionalFormatRules();
-  var affectedCols = {};
-  affectedCols[statusColIdx + 1] = true;
-  if (playerColIdx !== -1) affectedCols[playerColIdx + 1] = true;
   var newRules = rules.filter(function (rule) {
     var ruleRanges = rule.getRanges();
     for (var i = 0; i < ruleRanges.length; i++) {
-      if (affectedCols[ruleRanges[i].getColumn()]) return false;
+      if (ruleRanges[i].getSheet().getName() === sheet.getName()) return false;
     }
     return true;
   });
@@ -337,19 +327,19 @@ function applyStatusFormatting_(sheet, statusColIdx, numRows) {
   var myTeamRule = SpreadsheetApp.newConditionalFormatRule()
     .whenFormulaSatisfied('=$' + statusColLetter + '2="My Team"')
     .setBackground('#c9daf8')
-    .setRanges(ranges)
+    .setRanges([rowRange])
     .build();
 
   var faRule = SpreadsheetApp.newConditionalFormatRule()
     .whenFormulaSatisfied('=$' + statusColLetter + '2="FA"')
     .setBackground('#d9ead3')
-    .setRanges(ranges)
+    .setRanges([rowRange])
     .build();
 
   var waiverRule = SpreadsheetApp.newConditionalFormatRule()
     .whenFormulaSatisfied('=LEFT($' + statusColLetter + '2,7)="Waivers"')
     .setBackground('#fce5cd')
-    .setRanges(ranges)
+    .setRanges([rowRange])
     .build();
 
   var rosteredRule = SpreadsheetApp.newConditionalFormatRule()
@@ -362,7 +352,7 @@ function applyStatusFormatting_(sheet, statusColIdx, numRows) {
       ')'
     )
     .setFontColor('#999999')
-    .setRanges(ranges)
+    .setRanges([rowRange])
     .build();
 
   newRules.push(myTeamRule);
@@ -416,6 +406,28 @@ function promptLeagueKey() {
       ui.alert('League key saved: ' + key);
     }
   }
+}
+
+// ---------------------------------------------------------------------------
+// Time-driven trigger — run once from the Apps Script editor to install.
+// After that, updateOwnershipStatus fires daily at ~8 AM ET automatically.
+// ---------------------------------------------------------------------------
+
+function createDailyTrigger() {
+  // Remove any existing trigger for the same function to avoid duplicates
+  ScriptApp.getProjectTriggers().forEach(function(t) {
+    if (t.getHandlerFunction() === 'updateOwnershipStatus') {
+      ScriptApp.deleteTrigger(t);
+    }
+  });
+  ScriptApp.newTrigger('updateOwnershipStatus')
+    .timeBased()
+    .atHour(8)
+    .nearMinute(0)
+    .everyDays(1)
+    .inTimezone('America/New_York')
+    .create();
+  Logger.log('Daily trigger created for updateOwnershipStatus at ~8 AM ET.');
 }
 
 // ---------------------------------------------------------------------------

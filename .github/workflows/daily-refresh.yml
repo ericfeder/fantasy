@@ -1,0 +1,28 @@
+name: Daily Fantasy Refresh
+
+on:
+  schedule:
+    # 11:00 UTC = 7:00 AM ET (EDT) / 6:00 AM ET (EST)
+    - cron: '0 11 * * *'
+  workflow_dispatch:
+
+jobs:
+  refresh:
+    runs-on: ubuntu-latest
+
+    env:
+      GOOGLE_SERVICE_ACCOUNT_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY }}
+
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+          cache: 'pip'
+
+      - name: Install dependencies
+        run: pip install -r requirements.txt
+
+      - name: Run fantasy update pipeline
+        run: python update_fantasy.py

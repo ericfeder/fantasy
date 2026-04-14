@@ -1,10 +1,12 @@
 import pandas as pd
-import subprocess
 import json
 import os
 import re
-import tempfile
 import unicodedata
+
+from google.oauth2 import service_account
+from googleapiclient.discovery import build
+from googleapiclient.errors import HttpError
 
 SPREADSHEET_ID = '1LRhXDU-cu66YVhGZWZeY9qi1187elU8lcFtS_jVgxXs'
 
@@ -13,32 +15,48 @@ TABS = {
     'Pitchers': 'data/output/pitcher_cheatsheet.csv',
 }
 
+SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+
+_service = None
+
+
+def get_sheets_service():
+    """Build and cache the Google Sheets API service."""
+    global _service
+    if _service is not None:
+        return _service
+
+    key_json = os.environ.get('GOOGLE_SERVICE_ACCOUNT_KEY')
+    if key_json:
+        info = json.loads(key_json)
+        creds = service_account.Credentials.from_service_account_info(info, scopes=SCOPES)
+    else:
+        creds = service_account.Credentials.from_service_account_file(
+            'service-account.json', scopes=SCOPES)
+
+    _service = build('sheets', 'v4', credentials=creds)
+    return _service
+
 
 def csv_to_values(csv_path):
     """Read a CSV and return a list-of-lists (header + rows) for the Sheets API."""
     df = pd.read_csv(csv_path)
     header = df.columns.tolist()
     rows = df.fillna('').values.tolist()
-    # Convert numpy types to native Python for JSON serialisation
     rows = [[v.item() if hasattr(v, 'item') else v for v in row] for row in rows]
     return [header] + rows
 
 
 def get_sheet_id(tab_name):
     """Get the sheetId for a given tab name."""
-    result = subprocess.run(
-        ['gws', 'sheets', 'spreadsheets', 'get',
-         '--params', json.dumps({'spreadsheetId': SPREADSHEET_ID})],
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        return None
-    # Filter out the keyring info line
-    lines = [l for l in result.stdout.splitlines() if not l.strip().startswith('Using keyring')]
-    data = json.loads('\n'.join(lines))
-    for sheet in data.get('sheets', []):
-        if sheet['properties']['title'] == tab_name:
-            return sheet['properties']['sheetId']
+    try:
+        svc = get_sheets_service()
+        data = svc.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+        for sheet in data.get('sheets', []):
+            if sheet['properties']['title'] == tab_name:
+                return sheet['properties']['sheetId']
+    except HttpError as e:
+        print(f"  Error fetching sheet metadata: {e}")
     return None
 
 
@@ -49,52 +67,47 @@ def resize_tab(tab_name, num_rows, num_cols=26):
         print(f"  Could not find sheetId for {tab_name}")
         return
 
-    result = subprocess.run(
-        ['gws', 'sheets', 'spreadsheets', 'batchUpdate',
-         '--params', json.dumps({'spreadsheetId': SPREADSHEET_ID}),
-         '--json', json.dumps({'requests': [{
-             'updateSheetProperties': {
-                 'properties': {
-                     'sheetId': sheet_id,
-                     'gridProperties': {'rowCount': num_rows, 'columnCount': num_cols},
-                 },
-                 'fields': 'gridProperties(rowCount,columnCount)',
-             }
-         }]})],
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        stderr = [l for l in result.stderr.splitlines() if 'keyring' not in l.lower()]
-        print(f"  Warning resizing {tab_name}: {' '.join(stderr)}")
+    try:
+        svc = get_sheets_service()
+        svc.spreadsheets().batchUpdate(
+            spreadsheetId=SPREADSHEET_ID,
+            body={'requests': [{
+                'updateSheetProperties': {
+                    'properties': {
+                        'sheetId': sheet_id,
+                        'gridProperties': {'rowCount': num_rows, 'columnCount': num_cols},
+                    },
+                    'fields': 'gridProperties(rowCount,columnCount)',
+                }
+            }]},
+        ).execute()
+    except HttpError as e:
+        print(f"  Warning resizing {tab_name}: {e}")
 
 
 def clear_tab(tab_name):
     """Clear all values in a tab."""
-    result = subprocess.run(
-        [
-            'gws', 'sheets', 'spreadsheets', 'values', 'clear',
-            '--params', json.dumps({
-                'spreadsheetId': SPREADSHEET_ID,
-                'range': f'{tab_name}!A:ZZ',
-            }),
-        ],
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        print(f"  Warning clearing {tab_name}: {result.stderr.strip()}")
-    else:
+    try:
+        svc = get_sheets_service()
+        svc.spreadsheets().values().clear(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f'{tab_name}!A:ZZ',
+        ).execute()
         print(f"  Cleared {tab_name}")
+    except HttpError as e:
+        print(f"  Warning clearing {tab_name}: {e}")
 
 
 def write_tab(tab_name, values, batch_size=500):
-    """Write values to a tab, batching to stay within command-line limits."""
+    """Write values to a tab, batching to stay within API limits."""
     header = values[0]
     data_rows = values[1:]
     total_written = 0
+    svc = get_sheets_service()
 
     for i in range(0, len(data_rows), batch_size):
         batch = data_rows[i:i + batch_size]
-        start_row = i + 1  # row 1 is header when i==0, data starts at row 2
+        start_row = i + 1
         if i == 0:
             batch = [header] + batch
             start_row = 1
@@ -102,25 +115,15 @@ def write_tab(tab_name, values, batch_size=500):
         end_col = chr(ord('A') + len(header) - 1) if len(header) <= 26 else 'ZZ'
         cell_range = f'{tab_name}!A{start_row}:{end_col}{start_row + len(batch) - 1}'
 
-        body_json = json.dumps({'values': batch})
-
-        result = subprocess.run(
-            [
-                'gws', 'sheets', 'spreadsheets', 'values', 'update',
-                '--params', json.dumps({
-                    'spreadsheetId': SPREADSHEET_ID,
-                    'range': cell_range,
-                    'valueInputOption': 'RAW',
-                }),
-                '--json', body_json,
-            ],
-            capture_output=True, text=True,
-        )
-        if result.returncode != 0:
-            stderr = result.stderr.strip()
-            # Filter out the keyring info line
-            err_lines = [l for l in stderr.splitlines() if 'keyring' not in l.lower()]
-            print(f"  Error writing {tab_name} batch {i}: {' '.join(err_lines)}")
+        try:
+            svc.spreadsheets().values().update(
+                spreadsheetId=SPREADSHEET_ID,
+                range=cell_range,
+                valueInputOption='RAW',
+                body={'values': batch},
+            ).execute()
+        except HttpError as e:
+            print(f"  Error writing {tab_name} batch {i}: {e}")
             return False
 
         rows_in_batch = len(batch) - (1 if i == 0 else 0)
@@ -138,7 +141,6 @@ def format_tab(tab_name, num_rows, num_cols):
         return
 
     requests = [
-        # Freeze the header row
         {
             'updateSheetProperties': {
                 'properties': {
@@ -148,7 +150,6 @@ def format_tab(tab_name, num_rows, num_cols):
                 'fields': 'gridProperties.frozenRowCount,gridProperties.frozenColumnCount',
             }
         },
-        # Bold the header row
         {
             'repeatCell': {
                 'range': {
@@ -164,7 +165,6 @@ def format_tab(tab_name, num_rows, num_cols):
                 'fields': 'userEnteredFormat.textFormat.bold',
             }
         },
-        # Center-align all cells
         {
             'repeatCell': {
                 'range': {
@@ -182,7 +182,6 @@ def format_tab(tab_name, num_rows, num_cols):
                 'fields': 'userEnteredFormat.horizontalAlignment',
             }
         },
-        # Auto-resize all columns to fit content
         {
             'autoResizeDimensions': {
                 'dimensions': {
@@ -195,17 +194,15 @@ def format_tab(tab_name, num_rows, num_cols):
         },
     ]
 
-    result = subprocess.run(
-        ['gws', 'sheets', 'spreadsheets', 'batchUpdate',
-         '--params', json.dumps({'spreadsheetId': SPREADSHEET_ID}),
-         '--json', json.dumps({'requests': requests})],
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
-        stderr = [l for l in result.stderr.splitlines() if 'keyring' not in l.lower()]
-        print(f"  Warning formatting {tab_name}: {' '.join(stderr)}")
-    else:
+    try:
+        svc = get_sheets_service()
+        svc.spreadsheets().batchUpdate(
+            spreadsheetId=SPREADSHEET_ID,
+            body={'requests': requests},
+        ).execute()
         print(f"  Formatted {tab_name}")
+    except HttpError as e:
+        print(f"  Warning formatting {tab_name}: {e}")
 
 
 COLUMN_PADDING = {
@@ -228,20 +225,16 @@ def pad_columns(tab_name):
     if sheet_id is None:
         return
 
-    # Read the header row to map column names to indices
-    header_result = subprocess.run(
-        ['gws', 'sheets', 'spreadsheets', 'values', 'get',
-         '--params', json.dumps({
-             'spreadsheetId': SPREADSHEET_ID,
-             'range': f'{tab_name}!1:1',
-         })],
-        capture_output=True, text=True,
-    )
-    if header_result.returncode != 0:
+    svc = get_sheets_service()
+
+    try:
+        header_data = svc.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f'{tab_name}!1:1',
+        ).execute()
+    except HttpError:
         return
-    lines = [l for l in header_result.stdout.splitlines()
-             if not l.strip().startswith('Using keyring')]
-    header_data = json.loads('\n'.join(lines))
+
     headers = header_data.get('values', [[]])[0]
     if not headers:
         return
@@ -254,20 +247,13 @@ def pad_columns(tab_name):
         if name in COLUMN_MIN_WIDTH:
             name_min_width[i] = COLUMN_MIN_WIDTH[name]
 
-    # Fetch current column widths
-    result = subprocess.run(
-        ['gws', 'sheets', 'spreadsheets', 'get',
-         '--params', json.dumps({
-             'spreadsheetId': SPREADSHEET_ID,
-             'fields': 'sheets.properties,sheets.data.columnMetadata',
-         })],
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
+    try:
+        data = svc.spreadsheets().get(
+            spreadsheetId=SPREADSHEET_ID,
+            fields='sheets.properties,sheets.data.columnMetadata',
+        ).execute()
+    except HttpError:
         return
-
-    lines = [l for l in result.stdout.splitlines() if not l.strip().startswith('Using keyring')]
-    data = json.loads('\n'.join(lines))
 
     col_metadata = []
     for sheet in data.get('sheets', []):
@@ -301,13 +287,14 @@ def pad_columns(tab_name):
     if not requests:
         return
 
-    subprocess.run(
-        ['gws', 'sheets', 'spreadsheets', 'batchUpdate',
-         '--params', json.dumps({'spreadsheetId': SPREADSHEET_ID}),
-         '--json', json.dumps({'requests': requests})],
-        capture_output=True, text=True,
-    )
-    print(f"  Padded {len(requests)} columns in {tab_name}")
+    try:
+        svc.spreadsheets().batchUpdate(
+            spreadsheetId=SPREADSHEET_ID,
+            body={'requests': requests},
+        ).execute()
+        print(f"  Padded {len(requests)} columns in {tab_name}")
+    except HttpError as e:
+        print(f"  Warning padding columns in {tab_name}: {e}")
 
 
 def normalize_name(name):
@@ -327,19 +314,16 @@ def read_status_column(tab_name):
     """Read the existing Status column from the sheet and return a
     {normalized_player_name: status_value} mapping.  Returns an empty
     dict if the Status column doesn't exist yet."""
-    result = subprocess.run(
-        ['gws', 'sheets', 'spreadsheets', 'values', 'get',
-         '--params', json.dumps({
-             'spreadsheetId': SPREADSHEET_ID,
-             'range': f'{tab_name}!1:1',
-         })],
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
+    svc = get_sheets_service()
+
+    try:
+        data = svc.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f'{tab_name}!1:1',
+        ).execute()
+    except HttpError:
         return {}
-    lines = [l for l in result.stdout.splitlines()
-             if not l.strip().startswith('Using keyring')]
-    data = json.loads('\n'.join(lines))
+
     rows = data.get('values', [])
     if not rows:
         return {}
@@ -353,19 +337,14 @@ def read_status_column(tab_name):
     player_col = chr(ord('A') + player_idx)
     status_col = chr(ord('A') + status_idx)
 
-    result = subprocess.run(
-        ['gws', 'sheets', 'spreadsheets', 'values', 'get',
-         '--params', json.dumps({
-             'spreadsheetId': SPREADSHEET_ID,
-             'range': f'{tab_name}!{player_col}:{status_col}',
-         })],
-        capture_output=True, text=True,
-    )
-    if result.returncode != 0:
+    try:
+        data = svc.spreadsheets().values().get(
+            spreadsheetId=SPREADSHEET_ID,
+            range=f'{tab_name}!{player_col}:{status_col}',
+        ).execute()
+    except HttpError:
         return {}
-    lines = [l for l in result.stdout.splitlines()
-             if not l.strip().startswith('Using keyring')]
-    data = json.loads('\n'.join(lines))
+
     rows = data.get('values', [])
     if not rows:
         return {}
@@ -398,19 +377,17 @@ def restore_status_column(tab_name, values, status_map):
     if sheet_id is None:
         return
 
+    svc = get_sheets_service()
+
     # Clear all conditional formatting rules before the column insert so
     # they don't shift from col B (Status) to col C (the next data column).
     # The Apps Script will re-apply them on its next run.
-    clear_cf = subprocess.run(
-        ['gws', 'sheets', 'spreadsheets', 'get',
-         '--params', json.dumps({'spreadsheetId': SPREADSHEET_ID,
-                                 'fields': 'sheets.conditionalFormats,sheets.properties'})],
-        capture_output=True, text=True,
-    )
-    if clear_cf.returncode == 0:
-        lines = [l for l in clear_cf.stdout.splitlines()
-                 if not l.strip().startswith('Using keyring')]
-        cf_data = json.loads('\n'.join(lines))
+    try:
+        cf_data = svc.spreadsheets().get(
+            spreadsheetId=SPREADSHEET_ID,
+            fields='sheets.conditionalFormats,sheets.properties',
+        ).execute()
+
         delete_requests = []
         for s in cf_data.get('sheets', []):
             if s['properties']['title'] != tab_name:
@@ -419,39 +396,38 @@ def restore_status_column(tab_name, values, status_map):
                 delete_requests.append({
                     'deleteConditionalFormatRule': {
                         'sheetId': sheet_id,
-                        'index': 0,  # always 0 because list shrinks after each delete
+                        'index': 0,
                     }
                 })
+
         if delete_requests:
-            subprocess.run(
-                ['gws', 'sheets', 'spreadsheets', 'batchUpdate',
-                 '--params', json.dumps({'spreadsheetId': SPREADSHEET_ID}),
-                 '--json', json.dumps({'requests': delete_requests})],
-                capture_output=True, text=True,
-            )
+            svc.spreadsheets().batchUpdate(
+                spreadsheetId=SPREADSHEET_ID,
+                body={'requests': delete_requests},
+            ).execute()
             print(f"  Cleared {len(delete_requests)} conditional format rules from {tab_name}")
+    except HttpError as e:
+        print(f"  Warning clearing conditional formats: {e}")
 
     # Insert a new column right after Player
     insert_idx = name_idx + 1
-    insert_result = subprocess.run(
-        ['gws', 'sheets', 'spreadsheets', 'batchUpdate',
-         '--params', json.dumps({'spreadsheetId': SPREADSHEET_ID}),
-         '--json', json.dumps({'requests': [{
-             'insertDimension': {
-                 'range': {
-                     'sheetId': sheet_id,
-                     'dimension': 'COLUMNS',
-                     'startIndex': insert_idx,
-                     'endIndex': insert_idx + 1,
-                 },
-                 'inheritFromBefore': False,
-             }
-         }]})],
-        capture_output=True, text=True,
-    )
-    if insert_result.returncode != 0:
-        stderr = [l for l in insert_result.stderr.splitlines() if 'keyring' not in l.lower()]
-        print(f"  Warning inserting Status column: {' '.join(stderr)}")
+    try:
+        svc.spreadsheets().batchUpdate(
+            spreadsheetId=SPREADSHEET_ID,
+            body={'requests': [{
+                'insertDimension': {
+                    'range': {
+                        'sheetId': sheet_id,
+                        'dimension': 'COLUMNS',
+                        'startIndex': insert_idx,
+                        'endIndex': insert_idx + 1,
+                    },
+                    'inheritFromBefore': False,
+                }
+            }]},
+        ).execute()
+    except HttpError as e:
+        print(f"  Warning inserting Status column: {e}")
         return
 
     # Build the Status column values
@@ -468,18 +444,17 @@ def restore_status_column(tab_name, values, status_map):
     # Write the column
     write_col_letter = chr(ord('A') + insert_idx)
     cell_range = f'{tab_name}!{write_col_letter}1:{write_col_letter}{len(status_col)}'
-    body_json = json.dumps({'values': status_col})
-    subprocess.run(
-        ['gws', 'sheets', 'spreadsheets', 'values', 'update',
-         '--params', json.dumps({
-             'spreadsheetId': SPREADSHEET_ID,
-             'range': cell_range,
-             'valueInputOption': 'RAW',
-         }),
-         '--json', body_json],
-        capture_output=True, text=True,
-    )
-    print(f"  Restored {restored} Status values to {tab_name}")
+
+    try:
+        svc.spreadsheets().values().update(
+            spreadsheetId=SPREADSHEET_ID,
+            range=cell_range,
+            valueInputOption='RAW',
+            body={'values': status_col},
+        ).execute()
+        print(f"  Restored {restored} Status values to {tab_name}")
+    except HttpError as e:
+        print(f"  Warning writing Status column: {e}")
 
 
 def upload_all():
@@ -493,7 +468,6 @@ def upload_all():
 
         print(f"\n{tab_name}:")
 
-        # Save existing Status column before overwriting
         status_map = read_status_column(tab_name)
 
         values = csv_to_values(csv_path)
@@ -504,7 +478,6 @@ def upload_all():
         write_tab(tab_name, values)
         format_tab(tab_name, num_rows, num_cols)
 
-        # Restore the Status column if it existed
         restore_status_column(tab_name, values, status_map)
 
         pad_columns(tab_name)

@@ -1,5 +1,6 @@
 # Secrets
 oauth2.json
+service-account.json
 
 # Python
 __pycache__/

@@ -4,4 +4,5 @@ beautifulsoup4==4.12.2
 lxml==4.9.3
 yahoo_oauth
 yahoo_fantasy_api
-# unicodedata is part of the Python standard library
+google-api-python-client
+google-auth

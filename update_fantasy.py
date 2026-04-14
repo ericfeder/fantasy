@@ -92,16 +92,23 @@ def main():
     # Ensure directories exist
     ensure_directories()
     
-    # Step 1: Run the scraping script
+    # Step 1: Scrape batting projections
     scrape_status = run_command(['python', 'scrape_projections.py'], 
-                                "Scraping projections from FanGraphs")
+                                "Scraping batting projections from FanGraphs")
     
     if scrape_status != 0:
-        print("\nERROR: Projection scraping failed. Exiting.")
+        print("\nERROR: Batting projection scraping failed. Exiting.")
         return
     
-    # Step 2: Check and update source names in batter_cheatsheet.py if needed
-    # Only batter RoS files (exclude pitching and stray full-season scrapes)
+    # Step 2: Scrape pitching projections
+    pitch_scrape_status = run_command(['python', 'scrape_pitching_projections.py'],
+                                      "Scraping pitching projections from FanGraphs")
+    
+    if pitch_scrape_status != 0:
+        print("\nERROR: Pitching projection scraping failed. Exiting.")
+        return
+    
+    # Step 3: Check and update source names in batter_cheatsheet.py if needed
     batter_dir = 'data/2026/projections'
     batter_basenames = ('atc_projections.csv', 'oopsy_projections.csv')
     projection_files = [
@@ -112,22 +119,30 @@ def main():
     if projection_files:
         update_cheatsheet_sources(projection_files)
     
-    # Step 3: Fetch the latest player positions from Google Sheets
+    # Step 4: Fetch the latest player positions from Google Sheets
     positions_status = run_command(['python', 'fetch_positions.py'],
                                    "Fetching latest player positions")
     
     if positions_status != 0:
         print("\nWARNING: Position fetching failed. Will use existing position data if available.")
     
-    # Step 4: Run the batter cheatsheet script
+    # Step 5: Generate batter cheatsheet
     cheatsheet_status = run_command(['python', 'batter_cheatsheet.py'],
                                     "Generating batter cheatsheet")
     
     if cheatsheet_status != 0:
-        print("\nERROR: Cheatsheet generation failed.")
+        print("\nERROR: Batter cheatsheet generation failed.")
         return
     
-    # Step 5: Upload cheatsheets to Google Sheets
+    # Step 6: Generate pitcher cheatsheet
+    pitch_cheatsheet_status = run_command(['python', 'pitcher_cheatsheet.py'],
+                                          "Generating pitcher cheatsheet")
+    
+    if pitch_cheatsheet_status != 0:
+        print("\nERROR: Pitcher cheatsheet generation failed.")
+        return
+    
+    # Step 7: Upload cheatsheets to Google Sheets
     upload_status = run_command(['python', 'upload_to_sheets.py'],
                                 "Uploading cheatsheets to Google Sheets")
 
