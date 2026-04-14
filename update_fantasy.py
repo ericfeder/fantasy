@@ -98,7 +98,7 @@ def main():
     
     if scrape_status != 0:
         print("\nERROR: Batting projection scraping failed. Exiting.")
-        return
+        sys.exit(1)
     
     # Step 2: Scrape pitching projections
     pitch_scrape_status = run_command(['python', 'scrape_pitching_projections.py'],
@@ -106,7 +106,7 @@ def main():
     
     if pitch_scrape_status != 0:
         print("\nERROR: Pitching projection scraping failed. Exiting.")
-        return
+        sys.exit(1)
     
     # Step 3: Check and update source names in batter_cheatsheet.py if needed
     batter_dir = 'data/2026/projections'
@@ -132,7 +132,7 @@ def main():
     
     if cheatsheet_status != 0:
         print("\nERROR: Batter cheatsheet generation failed.")
-        return
+        sys.exit(1)
     
     # Step 6: Generate pitcher cheatsheet
     pitch_cheatsheet_status = run_command(['python', 'pitcher_cheatsheet.py'],
@@ -140,14 +140,15 @@ def main():
     
     if pitch_cheatsheet_status != 0:
         print("\nERROR: Pitcher cheatsheet generation failed.")
-        return
+        sys.exit(1)
     
     # Step 7: Upload cheatsheets to Google Sheets
     upload_status = run_command(['python', 'upload_to_sheets.py'],
                                 "Uploading cheatsheets to Google Sheets")
 
     if upload_status != 0:
-        print("\nWARNING: Google Sheets upload failed. Local CSVs are still up-to-date.")
+        print("\nERROR: Google Sheets upload failed.")
+        sys.exit(1)
 
     # Calculate and display total runtime
     end_time = time.time()
