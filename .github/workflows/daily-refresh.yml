@@ -2,8 +2,8 @@ name: Daily Fantasy Refresh
 
 on:
   schedule:
-    # 10:57 UTC = 6:57 AM Eastern during DST (EDT). In standard time (EST) this is 5:57 AM local — GitHub cron is UTC-only.
-    - cron: '57 10 * * *'
+    - cron: '50 7 * * *'
+      timezone: "America/New_York"
   workflow_dispatch:
 
 jobs:
