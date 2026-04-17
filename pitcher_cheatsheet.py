@@ -13,6 +13,114 @@ ENO_CACHE_PATH = 'data/2026/eno_pitch_report.csv'
 
 SOURCES = ['thebatx', 'oopsy']
 
+# Eno Sarris "Injured Pitchers" table (Apr 16, 2026 update).
+# (name, injury, return_eta, projected_rank_when_back)
+INJURED_PITCHERS = [
+    ("Zack Wheeler",          "ToS Surgery",     "> 1 wk",   35),
+    ("Trey Yesavage",         "Shoulder",        "> 1 wk",   40),
+    ("Nick Lodolo",           "Blisters",        "> 2 wks",  35),
+    ("Spencer Strider",       "Oblique",         "> 2 wks",  45),
+    ("Matthew Boyd",          "Biceps",          "> 2 wks",  60),
+    ("Patrick Sandoval",      "Tommy John",      "> 2 wks",  110),
+    ("Blake Snell",           "Shoulder",        "> 3 wks",  35),
+    ("Carlos Rodón",          "Elbow",           "> 3 wks",  40),
+    ("Bryce Miller",          "Oblique",         "> 3 wks",  50),
+    ("Grayson Rodriguez",     "Shoulder",        "> 3 wks",  55),
+    ("Joe Boyle",             "Elbow Strain",    "> 3 wks",  65),
+    ("José Berríos",          "Elbow",           "> 3 wks",  90),
+    ("Justin Verlander",      "Hip",             "> 3 wks",  105),
+    ("Nick Pivetta",          "Elbow?",          "?",        30),
+    ("Gerrit Cole",           "Tommy John",      "> 4 wks",  35),
+    ("Tatsuya Imai",          "Arm Fatigue",     "> 4 wks",  75),
+    ("Ryan Pepiot",           "Hip",             "> 6 wks",  40),
+    ("Jared Jones",           "Tommy John",      "> 6 wks",  45),
+    ("Shane Bieber",          "Elbow",           "> 6 wks",  55),
+    ("Joe Musgrove",          "Tommy John",      "> 6 wks",  55),
+    ("Justin Steele",         "Tommy John",      "> 6 wks",  50),
+    ("Quinn Priester",        "Wrist",           "> 6 wks",  125),
+    ("Hunter Brown",          "Shoulder Strain", "> 7 wks",  20),
+    ("Troy Melton",           "Elbow",           "> 8 wks",  80),
+    ("Johan Oviedo",          "Flexor Strain",   "> 8 wks",  100),
+    ("Spencer Schwellenbach", "Elbow Surgery",   "> 10 wks", 25),
+    ("Hunter Greene",         "Elbow Surgery",   "> 10 wks", 25),
+    ("Hurston Waldrep",       "Elbow Surgery",   "> 10 wks", 90),
+    ("Cristian Javier",       "Shoulder Strain", "> 10 wks", 125),
+    ("Corbin Burnes",         "Tommy John",      "> 14 wks", 45),
+]
+
+# Eno Sarris "Prospect Pitchers" table (Apr 16, 2026 update).
+# (name, aaa_stuff_plus, rank_if_called_up)
+PROSPECT_PITCHERS = [
+    ("Payton Tolle",     111, 50),
+    ("Jonah Tong",       111, 85),
+    ("Didier Fuentes",   110, 55),
+    ("Carlos Lagrange",  110, 60),
+    ("Trevor McDonald",  108, 75),
+    ("River Ryan",       106, 55),
+    ("Cade Povich",      105, 75),
+    ("Robby Snelling",   104, 70),
+    ("Christian Scott",  103, 70),
+    ("Tanner McDougal",  102, 70),
+    ("Logan Henderson",  100, 65),
+    ("Quinn Mathews",     99, 85),
+    ("Braxton Garrett",   98, 80),
+    ("Richard Fitts",     96, 80),
+    ("Zebby Matthews",    95, 85),
+    ("Gage Jump",         94, 90),
+    ("JR Ritchie",        93, 95),
+]
+
+
+def _normalize_pitcher_name(name):
+    """Lowercase, strip accents, suffixes, and punctuation for matching."""
+    if not isinstance(name, str):
+        return ''
+    s = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('utf-8').lower()
+    s = re.sub(r'\s+(jr\.?|sr\.?|ii|iii|iv)$', '', s)
+    s = re.sub(r'[^\w\s]', '', s)
+    s = re.sub(r'\s+', ' ', s).strip()
+    return s
+
+
+def apply_injured_and_prospects(merged):
+    """Fill eno_rank + eno_note for injured/prospect pitchers from the Eno
+    article, appending new rows for any names not already present."""
+    if 'eno_note' not in merged.columns:
+        merged['eno_note'] = ''
+    if 'eno_rank' not in merged.columns:
+        merged['eno_rank'] = pd.NA
+
+    name_to_idx = {}
+    for i, name in enumerate(merged['PlayerName']):
+        key = _normalize_pitcher_name(name)
+        if key and key not in name_to_idx:
+            name_to_idx[key] = i
+
+    new_rows = []
+
+    def _set_or_append(name, rank, note):
+        key = _normalize_pitcher_name(name)
+        idx = name_to_idx.get(key)
+        if idx is not None:
+            merged.at[idx, 'eno_rank'] = rank
+            merged.at[idx, 'eno_note'] = note
+        else:
+            new_rows.append({'PlayerName': name, 'eno_rank': rank, 'eno_note': note})
+
+    for name, injury, eta, rank in INJURED_PITCHERS:
+        note = f"Inj: {injury} ({eta})"
+        _set_or_append(name, rank, note)
+
+    for name, stuff, rank in PROSPECT_PITCHERS:
+        note = f"Prospect (AAA Stuff+ {stuff})"
+        _set_or_append(name, rank, note)
+
+    if new_rows:
+        merged = pd.concat([merged, pd.DataFrame(new_rows)], ignore_index=True)
+        print(f"Appended {len(new_rows)} pitchers not found in projections")
+
+    return merged
+
 # Pitcher scoring: CG, SHO, NH are not projected by any system (too rare)
 SCORING = {
     'IP': 2.25,
@@ -60,7 +168,7 @@ def fetch_eno_rankings(force_download=True):
     should_download = force_download or not os.path.exists(ENO_CACHE_PATH)
 
     if should_download:
-        url = "https://docs.google.com/spreadsheets/d/1daR9RNic3GcfDb6FLsm2OZRBS8VkqucOqHSnIS7ru5c/export?format=csv&gid=1693048986"
+        url = "https://docs.google.com/spreadsheets/d/1daR9RNic3GcfDb6FLsm2OZRBS8VkqucOqHSnIS7ru5c/export?format=csv&gid=394198178"
         try:
             response = requests.get(url)
             response.raise_for_status()
@@ -318,6 +426,10 @@ def create_pitcher_cheatsheet():
         if 'mlbam_id' in merged.columns:
             merged = merged.drop(columns=['mlbam_id'])
 
+    # Layer in injured + prospect pitchers from the Eno article (their
+    # "expected ranks") and tag them with a note column.
+    merged = apply_injured_and_prospects(merged)
+
     # Add probable starter schedule columns
     starters = fetch_probable_starters()
     merged = add_schedule_columns(merged, starters)
@@ -328,7 +440,7 @@ def create_pitcher_cheatsheet():
         'start_today', 'start_tomorrow', 'start_day_after',
         'starts_this_week', 'starts_next_week',
         'thebatx_ppg', 'oopsy_ppg', 'thebatx_g',
-        'eno_rank',
+        'eno_rank', 'eno_note',
     ]
     out_cols = [c for c in out_cols if c in merged.columns]
     merged = merged[out_cols]
@@ -360,6 +472,7 @@ def create_pitcher_cheatsheet():
         'starts_this_week': this_week_label,
         'starts_next_week': next_week_label,
         'eno_rank':         'Eno #',
+        'eno_note':         'Eno Note',
         'thebatx_ppg':      'THE BAT X',
         'thebatx_g':        'Proj. G',
         'oopsy_ppg':        'OOPSY',
