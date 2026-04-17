@@ -68,7 +68,7 @@ Two RoS projection systems, merged by player:
 - **ATC** — consensus Rest of Season projections
 - **OOPSY** — another RoS system from FanGraphs
 
-Output columns: `Player`, `Position`, `ATC Pts`, `OOPSY Pts`, `ATC Pts/G`, `OOPSY Pts/G`. Players with fewer than 10 projected games in all systems are filtered out.
+Output columns: `Player`, `Position`, `ATC Pts`, `OOPSY Pts`, `ATC Pts/G`, `OOPSY Pts/G`. Players whose max projected games (across ATC and OOPSY) is below 60% of the league-wide max projected games are filtered out.
 
 ### Pitchers
 

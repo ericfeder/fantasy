@@ -214,11 +214,17 @@ def create_batter_cheatsheet():
     for col in games_columns:
         merged_df[col] = merged_df[col].fillna(0).round().astype(int)
     
-    # Filter out players with fewer than 10 projected games in every system
+    # Filter out players projected to play <60% of remaining games
+    # (uses league-wide max projected G as the proxy for remaining games)
     max_games = merged_df[games_columns].max(axis=1)
+    remaining_games = max_games.max()
+    threshold = 0.6 * remaining_games
     before = len(merged_df)
-    merged_df = merged_df[max_games >= 10].reset_index(drop=True)
-    print(f"Filtered out {before - len(merged_df)} players with <10 projected games")
+    merged_df = merged_df[max_games >= threshold].reset_index(drop=True)
+    print(
+        f"Filtered out {before - len(merged_df)} players projected to play "
+        f"<60% of remaining games (threshold: {threshold:.1f} of {remaining_games:.0f} games)"
+    )
     
     # Calculate points per game for each projection system
     for source in sources:
