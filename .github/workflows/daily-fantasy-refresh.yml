@@ -2,7 +2,8 @@ name: Daily Fantasy Refresh
 
 on:
   schedule:
-    - cron: '57 10 * * *'
+    - cron: '34 6 * * *'
+      timezone: 'America/New_York'
   workflow_dispatch:
 
 jobs:
