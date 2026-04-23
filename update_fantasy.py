@@ -110,7 +110,7 @@ def main():
     
     # Step 3: Check and update source names in batter_cheatsheet.py if needed
     batter_dir = 'data/2026/projections'
-    batter_basenames = ('atc_projections.csv', 'oopsy_projections.csv')
+    batter_basenames = ('atc_projections.csv', 'oopsy_projections.csv', 'thebatx_projections.csv')
     projection_files = [
         os.path.join(batter_dir, b)
         for b in batter_basenames

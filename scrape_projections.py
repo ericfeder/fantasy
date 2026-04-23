@@ -16,6 +16,10 @@ ROS_URLS = {
         'roopsydc',
         'https://www.fangraphs.com/projections?type=roopsydc&stats=bat&pos=all&team=0&players=0&lg=all&z=1745729762&pageitems=30&statgroup=standard&fantasypreset=dashboard',
     ),
+    'thebatx': (
+        'rthebatx',
+        'https://www.fangraphs.com/projections?type=rthebatx&stats=bat&pos=all&team=0&players=0&lg=all&z=1745729762&pageitems=30&statgroup=standard&fantasypreset=dashboard',
+    ),
 }
 
 OUTPUT_DIR = 'data/2026/projections'

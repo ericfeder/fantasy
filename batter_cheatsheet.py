@@ -168,7 +168,7 @@ def create_batter_cheatsheet():
     ensure_directories()
     
     # Rest-of-season projections only (scraped via ratcdc / roopsydc → atc / oopsy CSVs)
-    sources = ['atc', 'oopsy']
+    sources = ['atc', 'oopsy', 'thebatx']
     projections = {}
     
     for source in sources:
@@ -281,8 +281,10 @@ def create_batter_cheatsheet():
     # Select and reorder columns
     final_columns = [
         'PlayerName', 'YahooPositions',
-        'atc_points', 'oopsy_points', 'atc_ppg', 'oopsy_ppg',
+        'atc_points', 'oopsy_points', 'thebatx_points',
+        'atc_ppg', 'oopsy_ppg', 'thebatx_ppg',
     ]
+    final_columns = [c for c in final_columns if c in merged_df.columns]
     merged_df = merged_df[final_columns]
     
     # Sort by RoS ATC points
@@ -290,12 +292,14 @@ def create_batter_cheatsheet():
     
     # Rename columns to human-friendly headers before saving
     merged_df = merged_df.rename(columns={
-        'PlayerName':    'Player',
+        'PlayerName':     'Player',
         'YahooPositions': 'Position',
-        'atc_points':    'ATC Pts',
-        'oopsy_points':  'OOPSY Pts',
-        'atc_ppg':       'ATC Pts/G',
-        'oopsy_ppg':     'OOPSY Pts/G',
+        'atc_points':     'ATC Pts',
+        'oopsy_points':   'OOPSY Pts',
+        'thebatx_points': 'THE BAT X Pts',
+        'atc_ppg':        'ATC Pts/G',
+        'oopsy_ppg':      'OOPSY Pts/G',
+        'thebatx_ppg':    'THE BAT X Pts/G',
     })
 
     # Save to CSV
