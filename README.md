@@ -26,12 +26,35 @@ Or use the shell wrapper:
 | `pitcher_cheatsheet.py`          | Generates a pitcher cheatsheet with projections, Eno rankings, and probable starts   |
 | `upload_to_sheets.py`            | Uploads cheatsheets to Google Sheets with formatting and Status column preservation  |
 | `draft_tracker.py`               | Live draft tracker using the Yahoo Fantasy API                                       |
-| `update_fantasy.py`              | Orchestrates scraping, cheatsheet generation, and upload                             |
+| `update_ownership.py`            | Refreshes Yahoo ownership Status column on the Hitters/Pitchers tabs                 |
+| `update_fantasy.py`              | Orchestrates scraping, cheatsheet generation, upload, and ownership refresh          |
 | `update_fantasy.sh`              | Shell wrapper for `update_fantasy.py`                                                |
 
-## Apps Script
+## Ownership Status Column
 
-The `apps_script/` directory contains Google Apps Script code that adds live ownership status to the cheatsheet spreadsheet. Each player gets a **Status** column showing their team name (rostered), waiver date (e.g. "Waivers (4/15)"), "FA" (free agent), or "My Team". Color-coded with conditional formatting. See [`apps_script/README.md`](apps_script/README.md) for setup instructions.
+Each player gets a **Status** column showing their team name (rostered), waiver date (e.g. "Waivers (4/15)"), "FA" (free agent), or "My Team", color-coded with conditional formatting.
+
+The scheduled GitHub Action refreshes the Status column via `update_ownership.py` (Python, runs on the runner) which talks to the Yahoo Fantasy API directly. The earlier Apps Script `doGet` webhook was retired because it kept hitting Google Apps Script's undocumented `UrlFetchApp` bandwidth limit.
+
+The `apps_script/` directory still contains the Apps Script project, but it's now only used for the manual `Fantasy Tools > Update Ownership Status` menu inside the spreadsheet UI. See [`apps_script/README.md`](apps_script/README.md) for setup instructions for that path.
+
+### GitHub Actions secrets
+
+The daily workflow needs these repo secrets:
+
+| Secret                        | Purpose                                                                |
+|-------------------------------|------------------------------------------------------------------------|
+| `GOOGLE_SERVICE_ACCOUNT_KEY`  | Service account JSON for the Sheets API                                |
+| `YAHOO_OAUTH_JSON_B64`        | base64 of `oauth2.json` (Yahoo OAuth2 creds for `update_ownership.py`) |
+| `YAHOO_LEAGUE_KEY`            | Yahoo league key, e.g. `469.l.94637`                                    |
+
+To populate `YAHOO_OAUTH_JSON_B64` from a working local `oauth2.json`:
+
+```bash
+base64 -i oauth2.json | tr -d '\n' | pbcopy
+```
+
+If Yahoo refresh tokens ever expire (rare, but possible), regenerate `oauth2.json` locally with `python draft_tracker.py --setup` and re-upload the secret.
 
 ## Directory Structure
 

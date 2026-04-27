@@ -4,7 +4,14 @@ Adds a **Status** column to the Hitters and Pitchers tabs in the cheatsheet
 spreadsheet, showing whether each player is rostered (with the team name),
 on waivers, or a free agent in your Yahoo Fantasy league.
 
-Runs entirely in the cloud via Google Apps Script — no local machine needed.
+> **Note:** The daily GitHub Action no longer calls this Apps Script. The
+> scheduled refresh now runs `update_ownership.py` on the GitHub runner,
+> which talks to Yahoo directly. Apps Script kept tripping the undocumented
+> `UrlFetchApp` "Bandwidth quota exceeded" limit on automated runs.
+>
+> This Apps Script project is kept around so you can still hit
+> **Fantasy Tools > Update Ownership Status** from the spreadsheet menu for
+> ad-hoc refreshes between scheduled runs.
 
 ## Setup
 
@@ -97,7 +104,11 @@ Click **Fantasy Tools > Update Ownership Status**. The script will:
 Check **View > Executions** in the Apps Script editor to see logs if anything
 goes wrong.
 
-### 9. Set up automatic updates
+### 9. (Optional) Apps Script time triggers
+
+The daily refresh now runs from GitHub Actions via `update_ownership.py`, so
+you generally don't need an Apps Script time trigger. If you want extra
+intra-day refreshes:
 
 1. In the Apps Script editor, click the **clock icon** (Triggers) in the left sidebar.
 2. Click **+ Add Trigger**.
@@ -108,7 +119,9 @@ goes wrong.
    - **Interval**: Every 4 hours (or your preference)
 4. Click **Save**.
 
-The status column will now refresh automatically throughout the day.
+Heads up: the Apps Script `UrlFetchApp` service has an undocumented
+"Bandwidth quota" that occasionally trips during automated runs. The Python
+path is the reliable one.
 
 ## How it works
 

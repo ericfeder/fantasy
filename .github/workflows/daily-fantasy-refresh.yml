@@ -12,6 +12,8 @@ jobs:
 
     env:
       GOOGLE_SERVICE_ACCOUNT_KEY: ${{ secrets.GOOGLE_SERVICE_ACCOUNT_KEY }}
+      YAHOO_OAUTH_JSON_B64: ${{ secrets.YAHOO_OAUTH_JSON_B64 }}
+      YAHOO_LEAGUE_KEY: ${{ secrets.YAHOO_LEAGUE_KEY }}
 
     steps:
       - uses: actions/checkout@v5
@@ -26,17 +28,3 @@ jobs:
 
       - name: Run fantasy update pipeline
         run: python update_fantasy.py
-
-      - name: Trigger Apps Script ownership update
-        run: |
-          body=$(curl -s -L "${{ secrets.APPS_SCRIPT_WEBHOOK_URL }}")
-          if echo "$body" | grep -q "Ownership updated"; then
-            echo "Apps Script ownership update completed successfully"
-          elif echo "$body" | grep -q "Unauthorized"; then
-            echo "Apps Script webhook returned Unauthorized — check WEBHOOK_TOKEN"
-            exit 1
-          else
-            echo "Apps Script webhook returned unexpected response:"
-            echo "$body"
-            exit 1
-          fi

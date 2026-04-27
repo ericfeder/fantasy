@@ -150,6 +150,16 @@ def main():
         print("\nERROR: Google Sheets upload failed.")
         sys.exit(1)
 
+    # Step 8: Refresh Yahoo ownership Status column. Soft failure: the upload
+    # step preserves yesterday's Status values, so a transient Yahoo outage
+    # leaves the sheet in a usable state until tomorrow's run.
+    ownership_status = run_command(['python', 'update_ownership.py'],
+                                   "Updating Yahoo ownership status")
+
+    if ownership_status != 0:
+        print("\nWARNING: Yahoo ownership update failed. "
+              "Sheet retains the previously preserved Status column.")
+
     # Calculate and display total runtime
     end_time = time.time()
     runtime = end_time - start_time
