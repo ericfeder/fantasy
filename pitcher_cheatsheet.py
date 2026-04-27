@@ -165,7 +165,9 @@ def calculate_fantasy_points(df):
 def load_2025_pitching_ppg():
     """Compute empirical 2025 fantasy Pts/G per pitcher from the FanGraphs
     leaderboard CSV at ``ACTUALS_2025_PITCHING``. Returns a DataFrame with
-    string ``playerid`` + ``ppg_2025``, or ``None`` if the file is missing.
+    string ``playerid`` + ``ppg_2025`` formatted as ``"<ppg> (<GS> GS)"``,
+    or ``None`` if the file is missing. GS (rather than G) makes
+    starter-vs-reliever role obvious at a glance.
     """
     if not os.path.exists(ACTUALS_2025_PITCHING):
         print(f"Warning: {ACTUALS_2025_PITCHING} not found; skipping 2025 Pts/G column")
@@ -174,7 +176,9 @@ def load_2025_pitching_ppg():
     df = pd.read_csv(ACTUALS_2025_PITCHING)
     df = df[df['G'].fillna(0) > 0].copy()
     df = calculate_fantasy_points(df)
-    df['ppg_2025'] = (df['FantasyPoints'] / df['G']).round(1)
+    df['GS'] = df['GS'].fillna(0).astype(int)
+    ppg = (df['FantasyPoints'] / df['G']).round(1)
+    df['ppg_2025'] = [f"{p} ({gs} GS)" for p, gs in zip(ppg, df['GS'])]
     df['playerid'] = df['playerid'].astype(str)
     print(f"Loaded 2025 pitching actuals for {len(df)} pitchers")
     return df[['playerid', 'ppg_2025']]

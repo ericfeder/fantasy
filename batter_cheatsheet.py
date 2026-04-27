@@ -30,7 +30,8 @@ ACTUALS_2025_BATTING = 'data/2025/actuals/2025_batting_actuals.csv'
 def load_2025_batting_ppg():
     """Compute empirical 2025 fantasy Pts/G per player from the FanGraphs
     leaderboard CSV at ``ACTUALS_2025_BATTING``. Returns a DataFrame with
-    string ``playerid`` + ``ppg_2025``, or ``None`` if the file is missing.
+    string ``playerid`` + ``ppg_2025`` formatted as ``"<ppg> (<G> G)"``,
+    or ``None`` if the file is missing.
     """
     if not os.path.exists(ACTUALS_2025_BATTING):
         print(f"Warning: {ACTUALS_2025_BATTING} not found; skipping 2025 Pts/G column")
@@ -39,7 +40,9 @@ def load_2025_batting_ppg():
     df = pd.read_csv(ACTUALS_2025_BATTING)
     df = df[df['G'].fillna(0) > 0].copy()
     df = calculate_fantasy_points(df)
-    df['ppg_2025'] = (df['FantasyPoints'] / df['G']).round(1)
+    df['G'] = df['G'].astype(int)
+    ppg = (df['FantasyPoints'] / df['G']).round(1)
+    df['ppg_2025'] = [f"{p} ({g} G)" for p, g in zip(ppg, df['G'])]
     df['playerid'] = df['playerid'].astype(str)
     print(f"Loaded 2025 batting actuals for {len(df)} players")
     return df[['playerid', 'ppg_2025']]
