@@ -27,6 +27,7 @@ Or use the shell wrapper:
 | `upload_to_sheets.py`            | Uploads cheatsheets to Google Sheets with formatting and Status column preservation  |
 | `draft_tracker.py`               | Live draft tracker using the Yahoo Fantasy API                                       |
 | `update_ownership.py`            | Refreshes Yahoo ownership Status column on the Hitters/Pitchers tabs                 |
+| `yahoo_client.py`                | Shared Yahoo Fantasy API client (OAuth + paginated `/players` reads)                 |
 | `update_fantasy.py`              | Orchestrates scraping, cheatsheet generation, upload, and ownership refresh          |
 | `update_fantasy.sh`              | Shell wrapper for `update_fantasy.py`                                                |
 
@@ -78,6 +79,8 @@ fantasy/
 ├── pitcher_cheatsheet.py
 ├── upload_to_sheets.py
 ├── draft_tracker.py
+├── update_ownership.py
+├── yahoo_client.py
 ├── update_fantasy.py
 └── update_fantasy.sh
 ```
@@ -101,6 +104,17 @@ Output columns: `Player`, `Position`, `ATC Pts`, `OOPSY Pts`, `ATC Pts/G`, `OOPS
 - **FanGraphs Probables Grid** — upcoming probable start schedule
 
 Pitchers are sorted by Eno rank. Output columns include points per game from each system, projected games (with GS breakdown), Eno rank, and schedule columns with date-based headers.
+
+#### Inclusion filter
+
+To keep the Pitchers tab focused on relevant arms, a pitcher is included only if they match **at least one** of:
+
+1. Owned by a Yahoo team or on waivers (looked up live via the Yahoo API)
+2. Ranked by Eno (in the Pitch Report, Injured, or Prospect tables)
+3. Projected to start at least `max(projected GS) / 3` games rest-of-season across THE BAT X / OOPSY
+4. Probable starter in any game this fantasy week or next
+
+If Yahoo ownership data can't be fetched (missing `YAHOO_LEAGUE_KEY`, OAuth failure, etc.), the filter is skipped entirely so legitimately rostered pitchers aren't dropped on a transient outage.
 
 ## Fantasy Scoring System
 

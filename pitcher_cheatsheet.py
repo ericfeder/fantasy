@@ -236,6 +236,110 @@ def fetch_eno_rankings(force_download=True):
         return None
 
 
+def fetch_yahoo_ownership_keys():
+    """Fetch sets of normalized names for Yahoo-rostered and waiver pitchers.
+
+    Returns (taken_keys, waiver_keys), each a set of normalized names, or
+    (None, None) if Yahoo data can't be retrieved (missing creds, network
+    error, etc.). Callers should treat None as "ownership data unavailable"
+    and skip the ownership-based criterion rather than treat every pitcher
+    as a free agent.
+    """
+    try:
+        from yahoo_client import (
+            STATUS_TAKEN, STATUS_WAIVERS,
+            YahooAuthError, fetch_players, load_oauth,
+        )
+        from update_ownership import normalize_name
+    except Exception as e:
+        print(f"Could not import Yahoo ownership helpers: {e}")
+        return None, None
+
+    league_key = os.environ.get('YAHOO_LEAGUE_KEY')
+    if not league_key:
+        print("YAHOO_LEAGUE_KEY not set; skipping ownership-based pitcher filter")
+        return None, None
+
+    try:
+        oauth = load_oauth()
+        if not oauth.token_is_valid():
+            oauth.refresh_access_token()
+        taken = fetch_players(oauth, league_key, STATUS_TAKEN)
+        waivers = fetch_players(oauth, league_key, STATUS_WAIVERS)
+    except YahooAuthError as e:
+        print(f"{e}; skipping ownership-based pitcher filter")
+        return None, None
+    except Exception as e:
+        print(f"Yahoo ownership fetch failed: {e}; skipping ownership-based pitcher filter")
+        return None, None
+
+    taken_keys = {normalize_name(p['name']) for p in taken if p.get('name')}
+    waiver_keys = {normalize_name(p['name']) for p in waivers if p.get('name')}
+    return taken_keys, waiver_keys
+
+
+def filter_included_pitchers(merged, taken_keys, waiver_keys):
+    """Keep pitchers matching at least one of:
+
+    1. Owned by a Yahoo team or on waivers
+    2. Ranked by Eno (eno_rank present)
+    3. Projected to start at least max(projected GS) / 3 games RoS
+    4. Probable starter in any game this fantasy week or next
+
+    If both ``taken_keys`` and ``waiver_keys`` are None we couldn't reach
+    Yahoo at all, so we skip the filter entirely rather than risk dropping
+    legitimately rostered pitchers.
+    """
+    if taken_keys is None and waiver_keys is None:
+        print("Skipping pitcher filter (no Yahoo ownership data)")
+        return merged
+
+    # Use the same normalization that built the Yahoo key sets so the
+    # isin() lookup actually matches.
+    from update_ownership import normalize_name as _yahoo_normalize_name
+
+    starts_cols = [c for c in (f'{s}_starts' for s in SOURCES) if c in merged.columns]
+    if starts_cols:
+        max_starts_per_pitcher = merged[starts_cols].max(axis=1).fillna(0)
+        league_max_gs = max_starts_per_pitcher.max()
+        gs_threshold = league_max_gs / 3
+    else:
+        max_starts_per_pitcher = pd.Series(0, index=merged.index)
+        league_max_gs = 0
+        gs_threshold = float('inf')
+
+    norm_names = merged['PlayerName'].apply(_yahoo_normalize_name)
+    owned_or_waivers = norm_names.isin((taken_keys or set()) | (waiver_keys or set()))
+
+    eno_ranked = (
+        merged['eno_rank'].notna()
+        if 'eno_rank' in merged.columns
+        else pd.Series(False, index=merged.index)
+    )
+
+    enough_starts = max_starts_per_pitcher >= gs_threshold
+
+    week_cols = [c for c in ('starts_this_week', 'starts_next_week') if c in merged.columns]
+    if week_cols:
+        probable_this_or_next = merged[week_cols].apply(
+            lambda col: col.fillna('').astype(str).str.strip().ne('')
+        ).any(axis=1)
+    else:
+        probable_this_or_next = pd.Series(False, index=merged.index)
+
+    keep = owned_or_waivers | eno_ranked | enough_starts | probable_this_or_next
+
+    print(
+        f"Pitcher filter: {int(keep.sum())}/{len(merged)} kept "
+        f"(owned/waivers={int(owned_or_waivers.sum())}, "
+        f"eno_ranked={int(eno_ranked.sum())}, "
+        f"GS>={gs_threshold:.1f}={int(enough_starts.sum())}, "
+        f"probable_this/next_wk={int(probable_this_or_next.sum())})"
+    )
+
+    return merged[keep].reset_index(drop=True)
+
+
 def fetch_probable_starters():
     """Fetch probable starter grid from FanGraphs API.
 
@@ -433,6 +537,12 @@ def create_pitcher_cheatsheet():
     # Add probable starter schedule columns
     starters = fetch_probable_starters()
     merged = add_schedule_columns(merged, starters)
+
+    # Apply inclusion filter: keep pitchers who are owned/on waivers, ranked
+    # by Eno, projected to start a meaningful share of remaining games, or
+    # have a probable start this/next fantasy week.
+    taken_keys, waiver_keys = fetch_yahoo_ownership_keys()
+    merged = filter_included_pitchers(merged, taken_keys, waiver_keys)
 
     # Build final column order
     out_cols = [

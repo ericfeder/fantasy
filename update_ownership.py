@@ -20,23 +20,22 @@ Falls back to local oauth2.json + service-account.json when env vars unset.
 """
 
 import argparse
-import base64
-import json
 import os
 import re
 import sys
-import tempfile
 import unicodedata
 
-from yahoo_oauth import OAuth2
-
 from upload_to_sheets import SPREADSHEET_ID, get_sheets_service
+from yahoo_client import (
+    STATUS_TAKEN,
+    STATUS_WAIVERS,
+    YahooAuthError,
+    fetch_my_team_name,
+    fetch_players,
+    load_oauth,
+)
 
-YAHOO_API_BASE = 'https://fantasysports.yahooapis.com/fantasy/v2'
 TAB_NAMES = ['Hitters', 'Pitchers']
-PAGE_SIZE = 25
-STATUS_TAKEN = 'T'
-STATUS_WAIVERS = 'W'
 STATUS_HEADER = 'Status'
 PLAYER_HEADER = 'Player'
 
@@ -80,40 +79,6 @@ def hex_to_rgb_dict(hex_str):
     return {'red': r, 'green': g, 'blue': b}
 
 
-# ---------------------------------------------------------------------------
-# Yahoo OAuth + API
-# ---------------------------------------------------------------------------
-
-def load_oauth():
-    """Load Yahoo OAuth2 credentials, preferring YAHOO_OAUTH_JSON_B64."""
-    encoded = os.environ.get('YAHOO_OAUTH_JSON_B64')
-    if encoded:
-        try:
-            decoded = base64.b64decode(encoded).decode('utf-8')
-            json.loads(decoded)
-        except Exception as e:
-            print(f"ERROR: YAHOO_OAUTH_JSON_B64 is malformed: {e}", file=sys.stderr)
-            sys.exit(2)
-
-        tmp = tempfile.NamedTemporaryFile(
-            mode='w', suffix='.json', delete=False, prefix='yahoo_oauth_'
-        )
-        tmp.write(decoded)
-        tmp.close()
-        return OAuth2(None, None, from_file=tmp.name)
-
-    local_path = os.path.join(os.path.dirname(__file__) or '.', 'oauth2.json')
-    if os.path.exists(local_path):
-        return OAuth2(None, None, from_file=local_path)
-
-    print(
-        "ERROR: Yahoo OAuth credentials not found. Set YAHOO_OAUTH_JSON_B64 "
-        "or place oauth2.json next to this script.",
-        file=sys.stderr,
-    )
-    sys.exit(2)
-
-
 def get_league_key(args):
     if args.league_key:
         return args.league_key.strip()
@@ -126,130 +91,6 @@ def get_league_key(args):
         file=sys.stderr,
     )
     sys.exit(2)
-
-
-def yahoo_get(oauth, url):
-    """GET against the Yahoo API, refreshing the access token if needed."""
-    if not oauth.token_is_valid():
-        oauth.refresh_access_token()
-    return oauth.session.get(url, params={'format': 'json'})
-
-
-def fetch_my_team_name(oauth, league_key):
-    url = f'{YAHOO_API_BASE}/league/{league_key}/teams'
-    r = yahoo_get(oauth, url)
-    if r.status_code != 200:
-        print(f"  Warning: /teams returned HTTP {r.status_code}; my-team detection skipped.")
-        return ''
-    try:
-        league = r.json()['fantasy_content']['league']
-        teams_obj = league[1]['teams']
-        count = int(teams_obj.get('count', 0))
-    except (KeyError, IndexError, TypeError, ValueError) as e:
-        print(f"  Warning: unexpected /teams response shape: {e}")
-        return ''
-
-    for i in range(count):
-        team_entry = teams_obj.get(str(i), {}).get('team')
-        if not team_entry:
-            continue
-        info = team_entry[0]
-        team_name = ''
-        is_owned = False
-        for item in info:
-            if not isinstance(item, dict):
-                continue
-            if 'name' in item:
-                team_name = item['name']
-            if 'is_owned_by_current_login' in item:
-                is_owned = str(item['is_owned_by_current_login']) == '1'
-        if is_owned:
-            return team_name
-    return ''
-
-
-def parse_player(player_array):
-    info_array = player_array[0]
-    name, player_id, owner_team, waiver_date = '', '', '', ''
-    for item in info_array:
-        if not isinstance(item, dict):
-            continue
-        if 'name' in item:
-            full = item['name'].get('full', '') if isinstance(item['name'], dict) else ''
-            name = full or name
-        if 'player_id' in item:
-            player_id = str(item['player_id'])
-        if 'ownership' in item and isinstance(item['ownership'], dict):
-            ownership = item['ownership']
-            owner_team = owner_team or ownership.get('owner_team_name', '')
-            waiver_date = waiver_date or ownership.get('waiver_date', '')
-    if len(player_array) > 1 and isinstance(player_array[1], dict):
-        ownership = player_array[1].get('ownership')
-        if isinstance(ownership, dict):
-            owner_team = owner_team or ownership.get('owner_team_name', '')
-            waiver_date = waiver_date or ownership.get('waiver_date', '')
-    if not name:
-        return None
-    return {
-        'name': name,
-        'player_id': player_id,
-        'owner_team': owner_team,
-        'waiver_date': waiver_date,
-    }
-
-
-def fetch_players(oauth, league_key, status):
-    """Paginated fetch of all players with a given Yahoo ownership status."""
-    out = []
-    start = 0
-    pages = 0
-    while True:
-        url = (
-            f'{YAHOO_API_BASE}/league/{league_key}/players'
-            f';status={status};start={start};count={PAGE_SIZE}'
-            f';out=ownership'
-        )
-        r = yahoo_get(oauth, url)
-        if r.status_code == 400 and start > 0:
-            break
-        if r.status_code != 200:
-            print(
-                f"  Yahoo API error (HTTP {r.status_code}) at start={start}: "
-                f"{r.text[:300]}"
-            )
-            break
-        try:
-            data = r.json()
-            league = data['fantasy_content']['league']
-            players_obj = league[1].get('players')
-        except (KeyError, IndexError, ValueError) as e:
-            print(f"  Warning: failed to parse players response at start={start}: {e}")
-            break
-
-        if not players_obj:
-            break
-        try:
-            count = int(players_obj.get('count', 0))
-        except (TypeError, ValueError):
-            count = 0
-        if count == 0:
-            break
-
-        for i in range(count):
-            entry = players_obj.get(str(i))
-            if not entry or 'player' not in entry:
-                continue
-            parsed = parse_player(entry['player'])
-            if parsed:
-                out.append(parsed)
-
-        pages += 1
-        start += PAGE_SIZE
-        if count < PAGE_SIZE:
-            break
-
-    print(f"  Fetched status={status}: {len(out)} players across {pages} page(s)")
-    return out
 
 
 # ---------------------------------------------------------------------------
@@ -478,7 +319,12 @@ def main():
     league_key = get_league_key(args)
     print(f"Updating ownership status for league {league_key}")
 
-    oauth = load_oauth()
+    try:
+        oauth = load_oauth()
+    except YahooAuthError as e:
+        print(f"ERROR: {e}", file=sys.stderr)
+        return 2
+
     if not oauth.token_is_valid():
         try:
             oauth.refresh_access_token()
