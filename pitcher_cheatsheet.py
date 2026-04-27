@@ -10,6 +10,7 @@ from collections import defaultdict
 PROJECTION_DIR = 'data/2026/projections'
 OUTPUT_DIR = 'data/output'
 ENO_CACHE_PATH = 'data/2026/eno_pitch_report.csv'
+ACTUALS_2025_PITCHING = 'data/2025/actuals/2025_pitching_actuals.csv'
 
 SOURCES = ['thebatx', 'oopsy']
 
@@ -159,6 +160,24 @@ def calculate_fantasy_points(df):
         if stat in df.columns:
             df['FantasyPoints'] += df[stat].fillna(0) * weight
     return df
+
+
+def load_2025_pitching_ppg():
+    """Compute empirical 2025 fantasy Pts/G per pitcher from the FanGraphs
+    leaderboard CSV at ``ACTUALS_2025_PITCHING``. Returns a DataFrame with
+    string ``playerid`` + ``ppg_2025``, or ``None`` if the file is missing.
+    """
+    if not os.path.exists(ACTUALS_2025_PITCHING):
+        print(f"Warning: {ACTUALS_2025_PITCHING} not found; skipping 2025 Pts/G column")
+        return None
+
+    df = pd.read_csv(ACTUALS_2025_PITCHING)
+    df = df[df['G'].fillna(0) > 0].copy()
+    df = calculate_fantasy_points(df)
+    df['ppg_2025'] = (df['FantasyPoints'] / df['G']).round(1)
+    df['playerid'] = df['playerid'].astype(str)
+    print(f"Loaded 2025 pitching actuals for {len(df)} pitchers")
+    return df[['playerid', 'ppg_2025']]
 
 
 def fetch_eno_rankings(force_download=True):
@@ -544,12 +563,20 @@ def create_pitcher_cheatsheet():
     taken_keys, waiver_keys = fetch_yahoo_ownership_keys()
     merged = filter_included_pitchers(merged, taken_keys, waiver_keys)
 
+    # Merge in empirical 2025 Pts/G (NaN for pitchers without a 2025 line)
+    actuals_2025 = load_2025_pitching_ppg()
+    if actuals_2025 is not None:
+        merged['playerid'] = merged['playerid'].astype(str)
+        merged = merged.merge(actuals_2025, on='playerid', how='left')
+    else:
+        merged['ppg_2025'] = pd.NA
+
     # Build final column order
     out_cols = [
         'PlayerName',
         'start_today', 'start_tomorrow', 'start_day_after',
         'starts_this_week', 'starts_next_week',
-        'thebatx_ppg', 'oopsy_ppg', 'thebatx_g',
+        'thebatx_ppg', 'oopsy_ppg', 'ppg_2025', 'thebatx_g',
         'eno_rank', 'eno_note',
     ]
     out_cols = [c for c in out_cols if c in merged.columns]
@@ -586,6 +613,7 @@ def create_pitcher_cheatsheet():
         'thebatx_ppg':      'THE BAT X',
         'thebatx_g':        'Proj. G',
         'oopsy_ppg':        'OOPSY',
+        'ppg_2025':         '2025 Pts/G',
     })
 
     output_file = f"{OUTPUT_DIR}/pitcher_cheatsheet.csv"

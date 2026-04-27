@@ -107,7 +107,11 @@ def main():
     if pitch_scrape_status != 0:
         print("\nERROR: Pitching projection scraping failed. Exiting.")
         sys.exit(1)
-    
+
+    # Note: 2025 actuals are final and live in the repo at
+    # data/2025/actuals/, so we don't re-scrape them on each run. Use
+    # `python scrape_2025_actuals.py` to regenerate them if needed.
+
     # Step 3: Check and update source names in batter_cheatsheet.py if needed
     batter_dir = 'data/2026/projections'
     batter_basenames = ('atc_projections.csv', 'oopsy_projections.csv', 'thebatx_projections.csv')

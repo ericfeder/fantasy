@@ -9,5 +9,11 @@ __pycache__/
 # macOS
 .DS_Store
 
-# Data (scraped/generated)
-data/
+# Data (scraped/generated). The 2025 season actuals are intentionally
+# tracked: they're final and let the 2025 Pts/G column work without a
+# daily scrape. Everything else under data/ is generated each run.
+data/2026/
+data/2025/projections/
+data/output/
+data/positions/
+data/*.csv
