@@ -378,24 +378,54 @@ def fetch_probable_starters():
     try:
         resp = requests.get(url, headers=headers, timeout=15)
         resp.raise_for_status()
-        records = resp.json()
-        print(f"Fetched {len(records)} probable-starter records from FanGraphs")
+        payload = resp.json()
     except Exception as e:
         print(f"Error fetching probable starters: {e}")
         return {}
 
+    # As of May 2026, the FanGraphs API returns:
+    #   {"games": [
+    #       {"abbName": "LAA", "gameDate": "2026-05-02", "isHome": true,
+    #        "team":     {"sp": {"playerId": "27468", ...}, ...},
+    #        "opponent": {"abbName": "NYM", "sp": {"playerId": "33703", ...}, ...}},
+    #       ...
+    #   ]}
+    # The API emits each matchup twice (once from each team's perspective), so we only
+    # record the SP listed under "team" per record to avoid double-counting. Older flat
+    # payloads (`teamSPPlayerId`/`OpponentAbbName`/`GameDate`) are also tolerated.
+    if isinstance(payload, dict):
+        records = payload.get('games', [])
+    else:
+        records = payload or []
+    print(f"Fetched {len(records)} probable-starter games from FanGraphs")
+
     today = date.today()
     starters = defaultdict(list)
     for rec in records:
-        pid = rec.get('teamSPPlayerId')
-        if not pid:
+        if not isinstance(rec, dict):
             continue
-        game_date = date.fromisoformat(rec['GameDate'][:10])
+
+        date_str = rec.get('gameDate') or rec.get('GameDate')
+        if not date_str:
+            continue
+        try:
+            game_date = date.fromisoformat(date_str[:10])
+        except (TypeError, ValueError):
+            continue
         if game_date < today:
             continue
-        opp = rec.get('OpponentAbbName', '?')
+
+        opponent = rec.get('opponent') or {}
+        opp_abbr = opponent.get('abbName') or rec.get('OpponentAbbName') or '?'
         is_home = bool(rec.get('isHome'))
-        starters[str(pid)].append((game_date, opp, is_home))
+
+        pid = (
+            ((rec.get('team') or {}).get('sp') or {}).get('playerId')
+            or rec.get('teamSPPlayerId')
+        )
+        if not pid:
+            continue
+        starters[str(pid)].append((game_date, opp_abbr, is_home))
 
     for pid in starters:
         starters[pid].sort(key=lambda x: x[0])
