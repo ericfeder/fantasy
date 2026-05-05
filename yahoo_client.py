@@ -21,6 +21,7 @@ YAHOO_API_BASE = 'https://fantasysports.yahooapis.com/fantasy/v2'
 PAGE_SIZE = 25
 STATUS_TAKEN = 'T'
 STATUS_WAIVERS = 'W'
+STATUS_FREEAGENT = 'FA'
 
 
 class YahooAuthError(RuntimeError):
@@ -107,10 +108,18 @@ def fetch_my_team_name(oauth, league_key):
 
 
 def parse_player(player_array):
-    """Pull (name, player_id, owner_team, waiver_date) out of a Yahoo
-    player array as returned by /league/.../players."""
+    """Pull player metadata out of a Yahoo player array as returned by
+    /league/.../players.
+
+    Returns a dict with: name, player_id, owner_team, waiver_date, status,
+    status_full. ``status`` is the short Yahoo roster-status code
+    (e.g. "IL10", "IL15", "IL60", "NA", "DTD", "O", "SUSP") and is
+    empty for healthy/active players. ``status_full`` is the
+    human-readable form (e.g. "15-Day IL").
+    """
     info_array = player_array[0]
     name, player_id, owner_team, waiver_date = '', '', '', ''
+    status, status_full = '', ''
     for item in info_array:
         if not isinstance(item, dict):
             continue
@@ -119,6 +128,10 @@ def parse_player(player_array):
             name = full or name
         if 'player_id' in item:
             player_id = str(item['player_id'])
+        if 'status' in item and isinstance(item['status'], str):
+            status = item['status'] or status
+        if 'status_full' in item and isinstance(item['status_full'], str):
+            status_full = item['status_full'] or status_full
         if 'ownership' in item and isinstance(item['ownership'], dict):
             ownership = item['ownership']
             owner_team = owner_team or ownership.get('owner_team_name', '')
@@ -135,6 +148,8 @@ def parse_player(player_array):
         'player_id': player_id,
         'owner_team': owner_team,
         'waiver_date': waiver_date,
+        'status': status,
+        'status_full': status_full,
     }
 
 

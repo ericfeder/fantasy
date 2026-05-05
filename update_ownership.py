@@ -27,6 +27,7 @@ import unicodedata
 
 from upload_to_sheets import SPREADSHEET_ID, get_sheets_service
 from yahoo_client import (
+    STATUS_FREEAGENT,
     STATUS_TAKEN,
     STATUS_WAIVERS,
     YahooAuthError,
@@ -42,7 +43,14 @@ PLAYER_HEADER = 'Player'
 CF_BG_MY_TEAM = '#c9daf8'
 CF_BG_FA = '#d9ead3'
 CF_BG_WAIVERS = '#fce5cd'
+CF_BG_INJURED = '#f4cccc'
 CF_FG_ROSTERED = '#999999'
+
+# Yahoo `status` codes that should both surface in the Status column and turn
+# the row red. Other codes (DTD, O, P, SUSP, ...) are still surfaced in the
+# Status column when present, but don't trigger the red highlight.
+INJURY_RED_PREFIXES = ('IL',)
+INJURY_RED_EXACT = ('NA',)
 
 
 def normalize_name(name):
@@ -169,24 +177,35 @@ def ensure_status_column(svc, tab_name, sheet_id, header):
     return new_header, insert_idx, True
 
 
-def compute_status(player_name, taken_map, waiver_map, my_team):
+def compute_status(player_name, taken_map, waiver_map, injury_map, my_team):
+    """Compute the Status-column string for a single player.
+
+    For rostered players we keep the existing behavior (team name or
+    "My Team"). For FA / Waiver players we additionally append the
+    Yahoo roster-status code (e.g. " - IL15", " - NA", " - DTD") when
+    present so the user can see at a glance which available players are
+    hurt or in the minors. Healthy FA / Waiver players keep their plain
+    label.
+    """
     norm = normalize_name(player_name)
     if not norm:
         return ''
     owner = taken_map.get(norm)
     if owner:
         return 'My Team' if my_team and owner == my_team else owner
+    injury = (injury_map.get(norm) or '').strip()
+    suffix = f' - {injury}' if injury else ''
     waiver = waiver_map.get(norm)
     if waiver:
         if isinstance(waiver, str) and waiver:
             try:
                 _, m, d = waiver.split('-')
-                return f'Waivers ({int(m)}/{int(d)})'
+                return f'Waivers ({int(m)}/{int(d)}){suffix}'
             except ValueError:
-                return 'Waivers'
-        return 'Waivers'
+                return f'Waivers{suffix}'
+        return f'Waivers{suffix}'
     if player_name:
-        return 'FA'
+        return f'FA{suffix}'
     return ''
 
 
@@ -255,13 +274,29 @@ def replace_conditional_formatting(svc, tab_name, sheet_id, status_col_idx,
             }
         return {'addConditionalFormatRule': {'rule': rule, 'index': 0}}
 
+    # Order matters: each add_rule inserts the new rule at index 0, so the
+    # LAST rule appended here ends up first in the evaluation order and wins
+    # the backgroundColor race when multiple rules match. We want the IL/NA
+    # red highlight to override the green "FA" / orange "Waivers" backgrounds,
+    # so it's appended last on purpose.
     requests_payload.append(add_rule(f'=${sl}2="My Team"', background=CF_BG_MY_TEAM))
     requests_payload.append(add_rule(f'=${sl}2="FA"', background=CF_BG_FA))
     requests_payload.append(add_rule(f'=LEFT(${sl}2,7)="Waivers"', background=CF_BG_WAIVERS))
+    # Rostered (gray font): anything non-empty that isn't FA/FA-injured/Waivers/My Team.
+    # Excluding `LEFT(${sl}2,3)="FA "` keeps "FA - IL15" out of the rostered bucket.
     requests_payload.append(
         add_rule(
-            f'=AND(LEN(${sl}2)>0,${sl}2<>"FA",LEFT(${sl}2,7)<>"Waivers",${sl}2<>"My Team")',
+            f'=AND(LEN(${sl}2)>0,${sl}2<>"FA",LEFT(${sl}2,3)<>"FA ",'
+            f'LEFT(${sl}2,7)<>"Waivers",${sl}2<>"My Team")',
             font_color=CF_FG_ROSTERED,
+        )
+    )
+    # Red highlight for IL / NA: any status string ending in " - IL<digits>" or " - NA".
+    # IFERROR keeps the rule safe against blank cells / non-string values.
+    requests_payload.append(
+        add_rule(
+            f'=IFERROR(REGEXMATCH(${sl}2,"\\s-\\s(IL\\d+|NA)$"),FALSE)',
+            background=CF_BG_INJURED,
         )
     )
 
@@ -277,7 +312,7 @@ def replace_conditional_formatting(svc, tab_name, sheet_id, status_col_idx,
 # Orchestration
 # ---------------------------------------------------------------------------
 
-def update_tab(svc, tab_name, taken_map, waiver_map, my_team):
+def update_tab(svc, tab_name, taken_map, waiver_map, injury_map, my_team):
     sheet_id, header, num_rows, num_cols = get_tab_metadata(svc, tab_name)
     if sheet_id is None:
         print(f"  {tab_name}: tab not found, skipping.")
@@ -298,7 +333,7 @@ def update_tab(svc, tab_name, taken_map, waiver_map, my_team):
     statuses = []
     matched = 0
     for name in player_names:
-        s = compute_status(str(name), taken_map, waiver_map, my_team)
+        s = compute_status(str(name), taken_map, waiver_map, injury_map, my_team)
         if s:
             matched += 1
         statuses.append(s)
@@ -342,6 +377,15 @@ def main():
 
     taken = fetch_players(oauth, league_key, STATUS_TAKEN)
     waivers = fetch_players(oauth, league_key, STATUS_WAIVERS)
+    # FA fetch can be slow (many pages) but is the only way to surface
+    # IL/NA/DTD status for unowned players. We tolerate failures here so
+    # a transient Yahoo hiccup doesn't wipe out the whole status update.
+    try:
+        free_agents = fetch_players(oauth, league_key, STATUS_FREEAGENT)
+    except Exception as e:
+        print(f"  Warning: free-agent fetch failed ({e}); injury status will only "
+              f"be available for waiver players.")
+        free_agents = []
 
     taken_map = {
         normalize_name(p['name']): (p['owner_team'] or 'Rostered')
@@ -351,12 +395,18 @@ def main():
         normalize_name(p['name']): (p['waiver_date'] or True)
         for p in waivers if p['name']
     }
+    injury_map = {}
+    for p in list(waivers) + list(free_agents):
+        if not p.get('name') or not p.get('status'):
+            continue
+        injury_map.setdefault(normalize_name(p['name']), p['status'])
+    print(f"  Injury statuses available for {len(injury_map)} unowned players.")
 
     svc = get_sheets_service()
     all_ok = True
     for tab in TAB_NAMES:
         try:
-            ok = update_tab(svc, tab, taken_map, waiver_map, my_team)
+            ok = update_tab(svc, tab, taken_map, waiver_map, injury_map, my_team)
             all_ok = all_ok and ok
         except Exception as e:
             print(f"  ERROR updating {tab}: {e}")
