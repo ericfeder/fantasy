@@ -320,8 +320,11 @@ def create_batter_cheatsheet():
     final_columns = [c for c in final_columns if c in merged_df.columns]
     merged_df = merged_df[final_columns]
     
-    # Sort by RoS ATC points per game
-    merged_df = merged_df.sort_values('atc_ppg', ascending=False)
+    # Sort by RoS ATC points per game, breaking ties with THE BAT X then OOPSY points per game
+    merged_df = merged_df.sort_values(
+        ['atc_ppg', 'thebatx_ppg', 'oopsy_ppg'],
+        ascending=[False, False, False],
+    )
     
     # Rename columns to human-friendly headers before saving
     merged_df = merged_df.rename(columns={
