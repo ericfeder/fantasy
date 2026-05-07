@@ -2,8 +2,13 @@ import pandas as pd
 import json
 import os
 import re
+import socket
+import ssl
+import time
 import unicodedata
 
+import google_auth_httplib2
+import httplib2
 from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
@@ -16,6 +21,11 @@ TABS = {
 }
 
 SCOPES = ['https://www.googleapis.com/auth/spreadsheets']
+
+# Per-request HTTP timeout in seconds. The default googleapiclient client has no
+# socket timeout, so a hung connection will block the pipeline indefinitely
+# (we hit this on 2026-05-07: TimeoutError after the underlying TCP read stalled).
+HTTP_TIMEOUT_SECS = 60
 
 _service = None
 
@@ -34,8 +44,51 @@ def get_sheets_service():
         creds = service_account.Credentials.from_service_account_file(
             'service-account.json', scopes=SCOPES)
 
-    _service = build('sheets', 'v4', credentials=creds)
+    authed_http = google_auth_httplib2.AuthorizedHttp(
+        creds, http=httplib2.Http(timeout=HTTP_TIMEOUT_SECS)
+    )
+    _service = build('sheets', 'v4', http=authed_http, cache_discovery=False)
     return _service
+
+
+# Transient network/SSL errors worth retrying. HttpError is handled separately
+# below so we can inspect the status code.
+_RETRY_EXC = (
+    TimeoutError,
+    socket.timeout,
+    ssl.SSLError,
+    ConnectionError,
+    httplib2.HttpLib2Error,
+)
+
+
+def execute_with_retry(request, max_attempts=5, initial_backoff=2.0):
+    """Execute a googleapiclient request with retries on transient failures.
+
+    Retries on socket timeouts, connection resets, SSL errors, and HTTP 5xx/429.
+    Uses exponential backoff (2, 4, 8, 16 seconds by default).
+    """
+    attempt = 0
+    while True:
+        attempt += 1
+        try:
+            return request.execute()
+        except HttpError as e:
+            status = getattr(e.resp, 'status', None)
+            retryable = status in (429, 500, 502, 503, 504)
+            if not retryable or attempt >= max_attempts:
+                raise
+            sleep_for = initial_backoff * (2 ** (attempt - 1))
+            print(f"  Sheets API HTTP {status}, retrying in {sleep_for:.0f}s "
+                  f"(attempt {attempt}/{max_attempts})")
+            time.sleep(sleep_for)
+        except _RETRY_EXC as e:
+            if attempt >= max_attempts:
+                raise
+            sleep_for = initial_backoff * (2 ** (attempt - 1))
+            print(f"  Sheets API transient error ({type(e).__name__}: {e}), "
+                  f"retrying in {sleep_for:.0f}s (attempt {attempt}/{max_attempts})")
+            time.sleep(sleep_for)
 
 
 def csv_to_values(csv_path):
@@ -51,7 +104,7 @@ def get_sheet_id(tab_name):
     """Get the sheetId for a given tab name."""
     try:
         svc = get_sheets_service()
-        data = svc.spreadsheets().get(spreadsheetId=SPREADSHEET_ID).execute()
+        data = execute_with_retry(svc.spreadsheets().get(spreadsheetId=SPREADSHEET_ID))
         for sheet in data.get('sheets', []):
             if sheet['properties']['title'] == tab_name:
                 return sheet['properties']['sheetId']
@@ -69,7 +122,7 @@ def resize_tab(tab_name, num_rows, num_cols=26):
 
     try:
         svc = get_sheets_service()
-        svc.spreadsheets().batchUpdate(
+        execute_with_retry(svc.spreadsheets().batchUpdate(
             spreadsheetId=SPREADSHEET_ID,
             body={'requests': [{
                 'updateSheetProperties': {
@@ -80,7 +133,7 @@ def resize_tab(tab_name, num_rows, num_cols=26):
                     'fields': 'gridProperties(rowCount,columnCount)',
                 }
             }]},
-        ).execute()
+        ))
     except HttpError as e:
         print(f"  Warning resizing {tab_name}: {e}")
 
@@ -89,10 +142,10 @@ def clear_tab(tab_name):
     """Clear all values in a tab."""
     try:
         svc = get_sheets_service()
-        svc.spreadsheets().values().clear(
+        execute_with_retry(svc.spreadsheets().values().clear(
             spreadsheetId=SPREADSHEET_ID,
             range=f'{tab_name}!A:ZZ',
-        ).execute()
+        ))
         print(f"  Cleared {tab_name}")
     except HttpError as e:
         print(f"  Warning clearing {tab_name}: {e}")
@@ -116,12 +169,12 @@ def write_tab(tab_name, values, batch_size=500):
         cell_range = f'{tab_name}!A{start_row}:{end_col}{start_row + len(batch) - 1}'
 
         try:
-            svc.spreadsheets().values().update(
+            execute_with_retry(svc.spreadsheets().values().update(
                 spreadsheetId=SPREADSHEET_ID,
                 range=cell_range,
                 valueInputOption='RAW',
                 body={'values': batch},
-            ).execute()
+            ))
         except HttpError as e:
             print(f"  Error writing {tab_name} batch {i}: {e}")
             return False
@@ -196,10 +249,10 @@ def format_tab(tab_name, num_rows, num_cols):
 
     try:
         svc = get_sheets_service()
-        svc.spreadsheets().batchUpdate(
+        execute_with_retry(svc.spreadsheets().batchUpdate(
             spreadsheetId=SPREADSHEET_ID,
             body={'requests': requests},
-        ).execute()
+        ))
         print(f"  Formatted {tab_name}")
     except HttpError as e:
         print(f"  Warning formatting {tab_name}: {e}")
@@ -228,10 +281,10 @@ def pad_columns(tab_name):
     svc = get_sheets_service()
 
     try:
-        header_data = svc.spreadsheets().values().get(
+        header_data = execute_with_retry(svc.spreadsheets().values().get(
             spreadsheetId=SPREADSHEET_ID,
             range=f'{tab_name}!1:1',
-        ).execute()
+        ))
     except HttpError:
         return
 
@@ -248,10 +301,10 @@ def pad_columns(tab_name):
             name_min_width[i] = COLUMN_MIN_WIDTH[name]
 
     try:
-        data = svc.spreadsheets().get(
+        data = execute_with_retry(svc.spreadsheets().get(
             spreadsheetId=SPREADSHEET_ID,
             fields='sheets.properties,sheets.data.columnMetadata',
-        ).execute()
+        ))
     except HttpError:
         return
 
@@ -288,10 +341,10 @@ def pad_columns(tab_name):
         return
 
     try:
-        svc.spreadsheets().batchUpdate(
+        execute_with_retry(svc.spreadsheets().batchUpdate(
             spreadsheetId=SPREADSHEET_ID,
             body={'requests': requests},
-        ).execute()
+        ))
         print(f"  Padded {len(requests)} columns in {tab_name}")
     except HttpError as e:
         print(f"  Warning padding columns in {tab_name}: {e}")
@@ -317,10 +370,10 @@ def read_status_column(tab_name):
     svc = get_sheets_service()
 
     try:
-        data = svc.spreadsheets().values().get(
+        data = execute_with_retry(svc.spreadsheets().values().get(
             spreadsheetId=SPREADSHEET_ID,
             range=f'{tab_name}!1:1',
-        ).execute()
+        ))
     except HttpError:
         return {}
 
@@ -338,10 +391,10 @@ def read_status_column(tab_name):
     status_col = chr(ord('A') + status_idx)
 
     try:
-        data = svc.spreadsheets().values().get(
+        data = execute_with_retry(svc.spreadsheets().values().get(
             spreadsheetId=SPREADSHEET_ID,
             range=f'{tab_name}!{player_col}:{status_col}',
-        ).execute()
+        ))
     except HttpError:
         return {}
 
@@ -383,10 +436,10 @@ def restore_status_column(tab_name, values, status_map):
     # they don't shift from col B (Status) to col C (the next data column).
     # The Apps Script will re-apply them on its next run.
     try:
-        cf_data = svc.spreadsheets().get(
+        cf_data = execute_with_retry(svc.spreadsheets().get(
             spreadsheetId=SPREADSHEET_ID,
             fields='sheets.conditionalFormats,sheets.properties',
-        ).execute()
+        ))
 
         delete_requests = []
         for s in cf_data.get('sheets', []):
@@ -401,10 +454,10 @@ def restore_status_column(tab_name, values, status_map):
                 })
 
         if delete_requests:
-            svc.spreadsheets().batchUpdate(
+            execute_with_retry(svc.spreadsheets().batchUpdate(
                 spreadsheetId=SPREADSHEET_ID,
                 body={'requests': delete_requests},
-            ).execute()
+            ))
             print(f"  Cleared {len(delete_requests)} conditional format rules from {tab_name}")
     except HttpError as e:
         print(f"  Warning clearing conditional formats: {e}")
@@ -412,7 +465,7 @@ def restore_status_column(tab_name, values, status_map):
     # Insert a new column right after Player
     insert_idx = name_idx + 1
     try:
-        svc.spreadsheets().batchUpdate(
+        execute_with_retry(svc.spreadsheets().batchUpdate(
             spreadsheetId=SPREADSHEET_ID,
             body={'requests': [{
                 'insertDimension': {
@@ -425,7 +478,7 @@ def restore_status_column(tab_name, values, status_map):
                     'inheritFromBefore': False,
                 }
             }]},
-        ).execute()
+        ))
     except HttpError as e:
         print(f"  Warning inserting Status column: {e}")
         return
@@ -446,12 +499,12 @@ def restore_status_column(tab_name, values, status_map):
     cell_range = f'{tab_name}!{write_col_letter}1:{write_col_letter}{len(status_col)}'
 
     try:
-        svc.spreadsheets().values().update(
+        execute_with_retry(svc.spreadsheets().values().update(
             spreadsheetId=SPREADSHEET_ID,
             range=cell_range,
             valueInputOption='RAW',
             body={'values': status_col},
-        ).execute()
+        ))
         print(f"  Restored {restored} Status values to {tab_name}")
     except HttpError as e:
         print(f"  Warning writing Status column: {e}")
