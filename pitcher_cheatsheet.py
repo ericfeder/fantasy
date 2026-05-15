@@ -14,61 +14,64 @@ ACTUALS_2025_PITCHING = 'data/2025/actuals/2025_pitching_actuals.csv'
 
 SOURCES = ['thebatx', 'oopsy']
 
-# Eno Sarris "Injured Pitchers" table (Apr 16, 2026 update).
+# Eno Sarris "Injured pitchers w/ approx. returns" table (May 15, 2026 update).
 # (name, injury, return_eta, projected_rank_when_back)
 INJURED_PITCHERS = [
-    ("Zack Wheeler",          "ToS Surgery",     "> 1 wk",   35),
-    ("Trey Yesavage",         "Shoulder",        "> 1 wk",   40),
-    ("Nick Lodolo",           "Blisters",        "> 2 wks",  35),
-    ("Spencer Strider",       "Oblique",         "> 2 wks",  45),
-    ("Matthew Boyd",          "Biceps",          "> 2 wks",  60),
-    ("Patrick Sandoval",      "Tommy John",      "> 2 wks",  110),
-    ("Blake Snell",           "Shoulder",        "> 3 wks",  35),
-    ("Carlos Rodón",          "Elbow",           "> 3 wks",  40),
-    ("Bryce Miller",          "Oblique",         "> 3 wks",  50),
-    ("Grayson Rodriguez",     "Shoulder",        "> 3 wks",  55),
-    ("Joe Boyle",             "Elbow Strain",    "> 3 wks",  65),
+    ("Grayson Rodriguez",     "Shoulder",        "> 1 wks",  55),
+    ("Joe Boyle",             "Elbow Strain",    "> 1 wks",  65),
+    ("Garrett Crochet",       "Shoulder",        "> 2 wks",  5),
+    ("Tyler Glasnow",         "Back",            "> 2 wks",  15),
+    ("Logan Webb",            "Knee",            "> 2 wks",  20),
+    ("Gerrit Cole",           "Tommy John",      "> 2 wks",  35),
+    ("Brandon Woodruff",      "Shoulder Inf.",   "> 2 wks",  40),
+    ("Jared Jones",           "Tommy John",      "> 2 wks",  45),
+    ("Taj Bradley",           "Pectoral",        "> 2 wks",  50),
+    ("Kodai Senga",           "Back",            "> 2 wks",  60),
+    ("Casey Mize",            "Adductor",        "> 2 wks",  65),
+    ("Steven Matz",           "Elbow",           "> 2 wks",  85),
+    ("Cole Ragans",           "Elbow",           "> 3 wks",  20),
     ("José Berríos",          "Elbow",           "> 3 wks",  90),
     ("Justin Verlander",      "Hip",             "> 3 wks",  105),
-    ("Nick Pivetta",          "Elbow?",          "?",        30),
-    ("Gerrit Cole",           "Tommy John",      "> 4 wks",  35),
-    ("Tatsuya Imai",          "Arm Fatigue",     "> 4 wks",  75),
-    ("Ryan Pepiot",           "Hip",             "> 6 wks",  40),
-    ("Jared Jones",           "Tommy John",      "> 6 wks",  45),
-    ("Shane Bieber",          "Elbow",           "> 6 wks",  55),
+    ("Nick Pivetta",          "Elbow?",          "> 4 wks",  30),
+    ("Shane Bieber",          "Elbow",           "> 4 wks",  55),
+    ("Mick Abel",             "Elbow",           "> 4 wks",  60),
+    ("Cade Povich",           "Shoulder",        "> 4 wks",  80),
+    ("Yusei Kikuchi",         "Shoulder",        "> 4 wks",  90),
+    ("Dean Kremer",           "Quad",            "> 4 wks",  105),
+    ("Hunter Brown",          "Shoulder Strain", "> 5 wks",  20),
+    ("Patrick Sandoval",      "Tommy John",      "> 5 wks",  110),
+    ("Tarik Skubal",          "Elbow",           "> 6 wks",  5),
+    ("Hunter Greene",         "Elbow Surgery",   "> 6 wks",  25),
     ("Joe Musgrove",          "Tommy John",      "> 6 wks",  55),
-    ("Justin Steele",         "Tommy John",      "> 6 wks",  50),
-    ("Quinn Priester",        "Wrist",           "> 6 wks",  125),
-    ("Hunter Brown",          "Shoulder Strain", "> 7 wks",  20),
-    ("Troy Melton",           "Elbow",           "> 8 wks",  80),
+    ("Matthew Boyd",          "Knee",            "> 6 wks",  60),
+    ("Robby Snelling",        "Elbow",           "> 6 wks",  65),
+    ("Max Scherzer",          "Forearm/Thumb",   "> 6 wks",  75),
+    ("Troy Melton",           "Elbow",           "> 6 wks",  80),
+    ("Cristian Javier",       "Shoulder Strain", "> 7 wks",  125),
+    ("Spencer Schwellenbach", "Elbow Surgery",   "> 8 wks",  25),
+    ("Corbin Burnes",         "Tommy John",      "> 8 wks",  45),
+    ("Justin Steele",         "Tommy John",      "> 8 wks",  50),
+    ("Hurston Waldrep",       "Elbow Surgery",   "> 8 wks",  90),
     ("Johan Oviedo",          "Flexor Strain",   "> 8 wks",  100),
-    ("Spencer Schwellenbach", "Elbow Surgery",   "> 10 wks", 25),
-    ("Hunter Greene",         "Elbow Surgery",   "> 10 wks", 25),
-    ("Hurston Waldrep",       "Elbow Surgery",   "> 10 wks", 90),
-    ("Cristian Javier",       "Shoulder Strain", "> 10 wks", 125),
-    ("Corbin Burnes",         "Tommy John",      "> 14 wks", 45),
+    ("Quinn Priester",        "Wrist",           "> 8 wks",  125),
 ]
 
-# Eno Sarris "Prospect Pitchers" table (Apr 16, 2026 update).
-# (name, aaa_stuff_plus, rank_if_called_up)
+# Eno Sarris "Select prospect pitchers" table (May 15, 2026 update).
+# (name, aaa_stuff_plus_or_None, rank_if_called_up)
 PROSPECT_PITCHERS = [
-    ("Payton Tolle",     111, 50),
-    ("Jonah Tong",       111, 85),
-    ("Didier Fuentes",   110, 55),
-    ("Carlos Lagrange",  110, 60),
-    ("Trevor McDonald",  108, 75),
-    ("River Ryan",       106, 55),
-    ("Cade Povich",      105, 75),
-    ("Robby Snelling",   104, 70),
-    ("Christian Scott",  103, 70),
-    ("Tanner McDougal",  102, 70),
-    ("Logan Henderson",  100, 65),
-    ("Quinn Mathews",     99, 85),
-    ("Braxton Garrett",   98, 80),
-    ("Richard Fitts",     96, 80),
-    ("Zebby Matthews",    95, 85),
-    ("Gage Jump",         94, 90),
-    ("JR Ritchie",        93, 95),
+    ("Ryan Sloan",       None, 50),
+    ("River Ryan",       110,  55),
+    ("Kade Anderson",    None, 55),
+    ("Carlos Lagrange",  108,  60),
+    ("Hagen Smith",      104,  70),
+    ("Tanner McDougal",  95,   70),
+    ("Robert Gasser",    104,  75),
+    ("Quinn Mathews",    99,   75),
+    ("Jonah Tong",       109,  80),
+    ("Thomas White",     95,   85),
+    ("Jack Wenniger",    98,   85),
+    ("Gage Jump",        99,   90),
+    ("Brody Hopkins",    99,   90),
 ]
 
 
@@ -113,7 +116,9 @@ def apply_injured_and_prospects(merged):
         _set_or_append(name, rank, note)
 
     for name, stuff, rank in PROSPECT_PITCHERS:
-        note = f"Prospect (AAA Stuff+ {stuff})"
+        note = (
+            f"Prospect (AAA Stuff+ {stuff})" if stuff is not None else "Prospect"
+        )
         _set_or_append(name, rank, note)
 
     if new_rows:
@@ -191,7 +196,7 @@ def fetch_eno_rankings(force_download=True):
     should_download = force_download or not os.path.exists(ENO_CACHE_PATH)
 
     if should_download:
-        url = "https://docs.google.com/spreadsheets/d/1daR9RNic3GcfDb6FLsm2OZRBS8VkqucOqHSnIS7ru5c/export?format=csv&gid=394198178"
+        url = "https://docs.google.com/spreadsheets/d/1daR9RNic3GcfDb6FLsm2OZRBS8VkqucOqHSnIS7ru5c/export?format=csv&gid=781005216"
         try:
             response = requests.get(url)
             response.raise_for_status()
