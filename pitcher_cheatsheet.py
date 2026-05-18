@@ -11,6 +11,7 @@ PROJECTION_DIR = 'data/2026/projections'
 OUTPUT_DIR = 'data/output'
 ENO_CACHE_PATH = 'data/2026/eno_pitch_report.csv'
 PL_CACHE_PATH = 'data/2026/pitcherlist_top100.csv'
+PL_INJURED_CACHE_PATH = 'data/2026/pitcherlist_injured.csv'
 # Nick Pollack's weekly top-100 SP list (active rotation only; IL arms omitted).
 PL_RANKINGS_URL = (
     'https://pitcherlist.com/top-100-starting-pitchers-for-2026-fantasy-baseball-'
@@ -172,12 +173,51 @@ def calculate_fantasy_points(df):
     return df
 
 
-def fetch_pitcherlist_rankings(force_download=True):
-    """Fetch Pitcher List top-100 SP ranks from the weekly article."""
-    os.makedirs(os.path.dirname(PL_CACHE_PATH), exist_ok=True)
-    should_download = force_download or not os.path.exists(PL_CACHE_PATH)
+def _parse_pl_injured_table(html):
+    """Parse PL article table: Injured Pitchers Who Will Be Considered When Healthy."""
+    marker = 'Injured Pitchers Who Will Be Considered When Healthy'
+    start = html.find(marker)
+    if start < 0:
+        return []
 
-    if should_download:
+    end_markers = (
+        "Nick's Loose Minor League",
+        'Nick&#8217;s Loose Minor League',
+        'Treat it s a bonus table',
+    )
+    end = len(html)
+    for m in end_markers:
+        pos = html.find(m, start)
+        if pos > start:
+            end = min(end, pos)
+
+    chunk = html[start:end]
+    row_pat = re.compile(
+        r'<tr>\s*<td><a class="player-tag"[^>]*>([^<]+)</a></td>\s*'
+        r'<td>([^<]*)</td>\s*<td>([^<]*)</td>\s*</tr>',
+        re.I | re.S,
+    )
+    rows = []
+    for name, injury, rank_range in row_pat.findall(chunk):
+        name = name.strip()
+        injury = injury.strip()
+        rank_range = rank_range.strip()
+        if name and rank_range:
+            rows.append({
+                'pl_name': name,
+                'pl_injury': injury,
+                'pl_rank_range': rank_range,
+            })
+    return rows
+
+
+def fetch_pitcherlist_rankings(force_download=True):
+    """Fetch Pitcher List top-100 SP ranks and IL relative-rank table."""
+    os.makedirs(os.path.dirname(PL_CACHE_PATH), exist_ok=True)
+    need_active = force_download or not os.path.exists(PL_CACHE_PATH)
+    need_injured = force_download or not os.path.exists(PL_INJURED_CACHE_PATH)
+
+    if need_active or need_injured:
         headers = {
             'User-Agent': (
                 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
@@ -188,52 +228,132 @@ def fetch_pitcherlist_rankings(force_download=True):
         try:
             response = requests.get(PL_RANKINGS_URL, headers=headers, timeout=20)
             response.raise_for_status()
+            html = response.text
+
             pat = re.compile(
                 r'<strong>(\d+)\.\s*<a[^>]*class="player-tag"[^>]*>([^<]+)</a>',
                 re.I,
             )
-            rows = []
-            for m in pat.finditer(response.text):
+            active_rows = []
+            for m in pat.finditer(html):
                 rank = int(m.group(1))
                 if 1 <= rank <= 100:
-                    rows.append({'pl_rank': rank, 'pl_name': m.group(2).strip()})
-            if len(rows) < 90:
-                raise ValueError(f"only parsed {len(rows)} PL ranks from article")
-            df = pd.DataFrame(rows).drop_duplicates(subset=['pl_rank'])
-            df.to_csv(PL_CACHE_PATH, index=False)
+                    active_rows.append({'pl_rank': rank, 'pl_name': m.group(2).strip()})
+            if len(active_rows) < 90:
+                raise ValueError(f"only parsed {len(active_rows)} PL ranks from article")
+            pd.DataFrame(active_rows).drop_duplicates(subset=['pl_rank']).to_csv(
+                PL_CACHE_PATH, index=False
+            )
             print(f"Downloaded Pitcher List top 100 to {PL_CACHE_PATH}")
+
+            injured_rows = _parse_pl_injured_table(html)
+            if len(injured_rows) < 10:
+                raise ValueError(f"only parsed {len(injured_rows)} PL injured pitchers")
+            pd.DataFrame(injured_rows).drop_duplicates(subset=['pl_name']).to_csv(
+                PL_INJURED_CACHE_PATH, index=False
+            )
+            print(
+                f"Downloaded {len(injured_rows)} Pitcher List injured pitchers "
+                f"to {PL_INJURED_CACHE_PATH}"
+            )
         except Exception as e:
             print(f"Error downloading Pitcher List rankings: {e}")
-            if not os.path.exists(PL_CACHE_PATH):
-                return None
+            if not os.path.exists(PL_CACHE_PATH) or not os.path.exists(PL_INJURED_CACHE_PATH):
+                return None, None
 
     try:
-        df = pd.read_csv(PL_CACHE_PATH)
-        df['pl_rank'] = pd.to_numeric(df['pl_rank'], errors='coerce')
-        df = df.dropna(subset=['pl_rank'])
-        df['pl_rank'] = df['pl_rank'].astype(int)
-        print(f"Loaded {len(df)} Pitcher List ranks")
-        return df
+        active = pd.read_csv(PL_CACHE_PATH)
+        active['pl_rank'] = pd.to_numeric(active['pl_rank'], errors='coerce')
+        active = active.dropna(subset=['pl_rank'])
+        active['pl_rank'] = active['pl_rank'].astype(int)
+        print(f"Loaded {len(active)} Pitcher List top-100 ranks")
+
+        injured = pd.read_csv(PL_INJURED_CACHE_PATH)
+        print(f"Loaded {len(injured)} Pitcher List injured pitchers")
+        return active, injured
     except Exception as e:
         print(f"Error parsing Pitcher List rankings: {e}")
-        return None
+        return None, None
 
 
-def merge_pitcherlist_rankings(merged, pl):
-    """Attach ``pl_rank`` by normalized player name."""
-    if pl is None or pl.empty:
+def merge_pitcherlist_rankings(merged, pl_active, pl_injured):
+    """Attach ``pl_rank`` from the active top 100, then IL relative-rank ranges."""
+    if 'pl_rank' not in merged.columns:
         merged['pl_rank'] = pd.NA
+
+    if pl_active is not None and not pl_active.empty:
+        pl = pl_active.copy()
+        pl['norm_name'] = pl['pl_name'].map(_normalize_pitcher_name)
+        pl_by_name = pl.drop_duplicates(subset=['norm_name']).set_index('norm_name')['pl_rank']
+        merged['pl_rank'] = merged['PlayerName'].map(
+            lambda n: pl_by_name.get(_normalize_pitcher_name(n), pd.NA)
+        )
+        matched = merged['pl_rank'].notna().sum()
+        print(f"Matched {matched} pitchers to Pitcher List top 100")
+
+    if pl_injured is not None and not pl_injured.empty:
+        pl_inj = pl_injured.copy()
+        pl_inj['norm_name'] = pl_inj['pl_name'].map(_normalize_pitcher_name)
+        range_by_name = pl_inj.drop_duplicates(subset=['norm_name']).set_index('norm_name')[
+            'pl_rank_range'
+        ]
+        filled = 0
+        for i, name in enumerate(merged['PlayerName']):
+            if pd.notna(merged.at[i, 'pl_rank']):
+                continue
+            key = _normalize_pitcher_name(name)
+            if key in range_by_name.index:
+                merged.at[i, 'pl_rank'] = range_by_name[key]
+                filled += 1
+        print(f"Filled PL # from injured table for {filled} pitchers")
+
+    return merged
+
+
+def apply_pl_injured(merged, pl_injured):
+    """Append PL IL arms missing from projections and tag with PL relative rank."""
+    if pl_injured is None or pl_injured.empty:
         return merged
 
-    pl = pl.copy()
-    pl['norm_name'] = pl['pl_name'].map(_normalize_pitcher_name)
-    pl_by_name = pl.drop_duplicates(subset=['norm_name']).set_index('norm_name')['pl_rank']
+    if 'eno_note' not in merged.columns:
+        merged['eno_note'] = ''
+    if 'pl_rank' not in merged.columns:
+        merged['pl_rank'] = pd.NA
 
-    merged['pl_rank'] = merged['PlayerName'].map(
-        lambda n: pl_by_name.get(_normalize_pitcher_name(n), pd.NA)
-    )
-    matched = merged['pl_rank'].notna().sum()
-    print(f"Matched {matched} pitchers to Pitcher List top 100")
+    name_to_idx = {}
+    for i, name in enumerate(merged['PlayerName']):
+        key = _normalize_pitcher_name(name)
+        if key and key not in name_to_idx:
+            name_to_idx[key] = i
+
+    new_rows = []
+    for _, row in pl_injured.iterrows():
+        name = row['pl_name']
+        rank_range = row['pl_rank_range']
+        injury = row.get('pl_injury', '')
+        key = _normalize_pitcher_name(name)
+        idx = name_to_idx.get(key)
+        if idx is not None:
+            if pd.isna(merged.at[idx, 'pl_rank']):
+                merged.at[idx, 'pl_rank'] = rank_range
+            existing_note = str(merged.at[idx, 'eno_note'] or '').strip()
+            pl_tag = f"PL IL: {injury} ({rank_range})" if injury else f"PL IL: ({rank_range})"
+            if pl_tag not in existing_note:
+                merged.at[idx, 'eno_note'] = (
+                    f"{existing_note}; {pl_tag}" if existing_note else pl_tag
+                )
+        else:
+            note = f"PL IL: {injury} ({rank_range})" if injury else f"PL IL: ({rank_range})"
+            new_rows.append({
+                'PlayerName': name,
+                'pl_rank': rank_range,
+                'eno_note': note,
+            })
+
+    if new_rows:
+        merged = pd.concat([merged, pd.DataFrame(new_rows)], ignore_index=True)
+        print(f"Appended {len(new_rows)} pitchers from Pitcher List injured table")
+
     return merged
 
 
@@ -354,13 +474,14 @@ def fetch_yahoo_ownership_keys():
     return taken_keys, waiver_keys
 
 
-def filter_included_pitchers(merged, taken_keys, waiver_keys):
+def filter_included_pitchers(merged, taken_keys, waiver_keys, pl_injured_keys=None):
     """Keep pitchers matching at least one of:
 
     1. Owned by a Yahoo team or on waivers
     2. Ranked by Eno (eno_rank present)
-    3. Projected to start at least max(projected GS) / 3 games RoS
-    4. Probable starter in any game this fantasy week or next
+    3. On Pitcher List's injured-when-healthy table
+    4. Projected to start at least max(projected GS) / 3 games RoS
+    5. Probable starter in any game this fantasy week or next
 
     If both ``taken_keys`` and ``waiver_keys`` are None we couldn't reach
     Yahoo at all, so we skip the filter entirely rather than risk dropping
@@ -393,6 +514,12 @@ def filter_included_pitchers(merged, taken_keys, waiver_keys):
         else pd.Series(False, index=merged.index)
     )
 
+    pl_injured_listed = (
+        norm_names.isin(pl_injured_keys or set())
+        if pl_injured_keys
+        else pd.Series(False, index=merged.index)
+    )
+
     enough_starts = max_starts_per_pitcher >= gs_threshold
 
     week_cols = [c for c in ('starts_this_week', 'starts_next_week') if c in merged.columns]
@@ -403,12 +530,16 @@ def filter_included_pitchers(merged, taken_keys, waiver_keys):
     else:
         probable_this_or_next = pd.Series(False, index=merged.index)
 
-    keep = owned_or_waivers | eno_ranked | enough_starts | probable_this_or_next
+    keep = (
+        owned_or_waivers | eno_ranked | pl_injured_listed
+        | enough_starts | probable_this_or_next
+    )
 
     print(
         f"Pitcher filter: {int(keep.sum())}/{len(merged)} kept "
         f"(owned/waivers={int(owned_or_waivers.sum())}, "
         f"eno_ranked={int(eno_ranked.sum())}, "
+        f"pl_injured={int(pl_injured_listed.sum())}, "
         f"GS>={gs_threshold:.1f}={int(enough_starts.sum())}, "
         f"probable_this/next_wk={int(probable_this_or_next.sum())})"
     )
@@ -644,14 +775,23 @@ def create_pitcher_cheatsheet():
     starters = fetch_probable_starters()
     merged = add_schedule_columns(merged, starters)
 
-    # Apply inclusion filter: keep pitchers who are owned/on waivers, ranked
-    # by Eno, projected to start a meaningful share of remaining games, or
-    # have a probable start this/next fantasy week.
-    taken_keys, waiver_keys = fetch_yahoo_ownership_keys()
-    merged = filter_included_pitchers(merged, taken_keys, waiver_keys)
+    pl_active, pl_injured = fetch_pitcherlist_rankings()
+    merged = merge_pitcherlist_rankings(merged, pl_active, pl_injured)
+    merged = apply_pl_injured(merged, pl_injured)
 
-    pl = fetch_pitcherlist_rankings()
-    merged = merge_pitcherlist_rankings(merged, pl)
+    pl_injured_keys = None
+    if pl_injured is not None and not pl_injured.empty:
+        pl_injured_keys = {
+            _normalize_pitcher_name(n) for n in pl_injured['pl_name'] if isinstance(n, str)
+        }
+
+    # Apply inclusion filter: keep pitchers who are owned/on waivers, ranked
+    # by Eno or PL IL table, projected to start a meaningful share of remaining
+    # games, or have a probable start this/next fantasy week.
+    taken_keys, waiver_keys = fetch_yahoo_ownership_keys()
+    merged = filter_included_pitchers(
+        merged, taken_keys, waiver_keys, pl_injured_keys=pl_injured_keys
+    )
 
     # Build final column order
     out_cols = [
