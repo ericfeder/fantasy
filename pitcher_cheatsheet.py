@@ -10,7 +10,12 @@ from collections import defaultdict
 PROJECTION_DIR = 'data/2026/projections'
 OUTPUT_DIR = 'data/output'
 ENO_CACHE_PATH = 'data/2026/eno_pitch_report.csv'
-ACTUALS_2025_PITCHING = 'data/2025/actuals/2025_pitching_actuals.csv'
+PL_CACHE_PATH = 'data/2026/pitcherlist_top100.csv'
+# Nick Pollack's weekly top-100 SP list (active rotation only; IL arms omitted).
+PL_RANKINGS_URL = (
+    'https://pitcherlist.com/top-100-starting-pitchers-for-2026-fantasy-baseball-'
+    '5-11-week-8-rankings/'
+)
 
 SOURCES = ['thebatx', 'oopsy']
 
@@ -167,26 +172,69 @@ def calculate_fantasy_points(df):
     return df
 
 
-def load_2025_pitching_ppg():
-    """Compute empirical 2025 fantasy Pts/G per pitcher from the FanGraphs
-    leaderboard CSV at ``ACTUALS_2025_PITCHING``. Returns a DataFrame with
-    string ``playerid`` + ``ppg_2025`` formatted as ``"<ppg> (<GS> GS)"``,
-    or ``None`` if the file is missing. GS (rather than G) makes
-    starter-vs-reliever role obvious at a glance.
-    """
-    if not os.path.exists(ACTUALS_2025_PITCHING):
-        print(f"Warning: {ACTUALS_2025_PITCHING} not found; skipping 2025 Pts/G column")
+def fetch_pitcherlist_rankings(force_download=True):
+    """Fetch Pitcher List top-100 SP ranks from the weekly article."""
+    os.makedirs(os.path.dirname(PL_CACHE_PATH), exist_ok=True)
+    should_download = force_download or not os.path.exists(PL_CACHE_PATH)
+
+    if should_download:
+        headers = {
+            'User-Agent': (
+                'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
+                'AppleWebKit/537.36 (KHTML, like Gecko) '
+                'Chrome/120.0.0.0 Safari/537.36'
+            ),
+        }
+        try:
+            response = requests.get(PL_RANKINGS_URL, headers=headers, timeout=20)
+            response.raise_for_status()
+            pat = re.compile(
+                r'<strong>(\d+)\.\s*<a[^>]*class="player-tag"[^>]*>([^<]+)</a>',
+                re.I,
+            )
+            rows = []
+            for m in pat.finditer(response.text):
+                rank = int(m.group(1))
+                if 1 <= rank <= 100:
+                    rows.append({'pl_rank': rank, 'pl_name': m.group(2).strip()})
+            if len(rows) < 90:
+                raise ValueError(f"only parsed {len(rows)} PL ranks from article")
+            df = pd.DataFrame(rows).drop_duplicates(subset=['pl_rank'])
+            df.to_csv(PL_CACHE_PATH, index=False)
+            print(f"Downloaded Pitcher List top 100 to {PL_CACHE_PATH}")
+        except Exception as e:
+            print(f"Error downloading Pitcher List rankings: {e}")
+            if not os.path.exists(PL_CACHE_PATH):
+                return None
+
+    try:
+        df = pd.read_csv(PL_CACHE_PATH)
+        df['pl_rank'] = pd.to_numeric(df['pl_rank'], errors='coerce')
+        df = df.dropna(subset=['pl_rank'])
+        df['pl_rank'] = df['pl_rank'].astype(int)
+        print(f"Loaded {len(df)} Pitcher List ranks")
+        return df
+    except Exception as e:
+        print(f"Error parsing Pitcher List rankings: {e}")
         return None
 
-    df = pd.read_csv(ACTUALS_2025_PITCHING)
-    df = df[df['G'].fillna(0) > 0].copy()
-    df = calculate_fantasy_points(df)
-    df['GS'] = df['GS'].fillna(0).astype(int)
-    ppg = (df['FantasyPoints'] / df['G']).round(1)
-    df['ppg_2025'] = [f"{p} ({gs} GS)" for p, gs in zip(ppg, df['GS'])]
-    df['playerid'] = df['playerid'].astype(str)
-    print(f"Loaded 2025 pitching actuals for {len(df)} pitchers")
-    return df[['playerid', 'ppg_2025']]
+
+def merge_pitcherlist_rankings(merged, pl):
+    """Attach ``pl_rank`` by normalized player name."""
+    if pl is None or pl.empty:
+        merged['pl_rank'] = pd.NA
+        return merged
+
+    pl = pl.copy()
+    pl['norm_name'] = pl['pl_name'].map(_normalize_pitcher_name)
+    pl_by_name = pl.drop_duplicates(subset=['norm_name']).set_index('norm_name')['pl_rank']
+
+    merged['pl_rank'] = merged['PlayerName'].map(
+        lambda n: pl_by_name.get(_normalize_pitcher_name(n), pd.NA)
+    )
+    matched = merged['pl_rank'].notna().sum()
+    print(f"Matched {matched} pitchers to Pitcher List top 100")
+    return merged
 
 
 def fetch_eno_rankings(force_download=True):
@@ -602,21 +650,16 @@ def create_pitcher_cheatsheet():
     taken_keys, waiver_keys = fetch_yahoo_ownership_keys()
     merged = filter_included_pitchers(merged, taken_keys, waiver_keys)
 
-    # Merge in empirical 2025 Pts/G (NaN for pitchers without a 2025 line)
-    actuals_2025 = load_2025_pitching_ppg()
-    if actuals_2025 is not None:
-        merged['playerid'] = merged['playerid'].astype(str)
-        merged = merged.merge(actuals_2025, on='playerid', how='left')
-    else:
-        merged['ppg_2025'] = pd.NA
+    pl = fetch_pitcherlist_rankings()
+    merged = merge_pitcherlist_rankings(merged, pl)
 
     # Build final column order
     out_cols = [
         'PlayerName',
         'start_today', 'start_tomorrow', 'start_day_after',
         'starts_this_week', 'starts_next_week',
-        'thebatx_ppg', 'oopsy_ppg', 'ppg_2025', 'thebatx_g',
-        'eno_rank', 'eno_note',
+        'oopsy_ppg', 'thebatx_g',
+        'eno_rank', 'pl_rank', 'eno_note',
     ]
     out_cols = [c for c in out_cols if c in merged.columns]
     merged = merged[out_cols]
@@ -648,11 +691,10 @@ def create_pitcher_cheatsheet():
         'starts_this_week': this_week_label,
         'starts_next_week': next_week_label,
         'eno_rank':         'Eno #',
+        'pl_rank':          'PL #',
         'eno_note':         'Eno Note',
-        'thebatx_ppg':      'THE BAT X',
         'thebatx_g':        'Proj. G',
         'oopsy_ppg':        'OOPSY',
-        'ppg_2025':         '2025 Pts/G',
     })
 
     output_file = f"{OUTPUT_DIR}/pitcher_cheatsheet.csv"

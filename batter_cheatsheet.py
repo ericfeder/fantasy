@@ -283,8 +283,7 @@ def create_batter_cheatsheet():
     # Select and reorder columns
     final_columns = [
         'PlayerName', 'YahooPositions',
-        'oopsy_games',
-        'thebatx_ppg', 'oopsy_ppg', 'atc_ppg',
+        'oopsy_ppg', 'thebatx_ppg', 'atc_ppg', 'oopsy_games',
     ]
     final_columns = [c for c in final_columns if c in merged_df.columns]
     merged_df = merged_df[final_columns]
