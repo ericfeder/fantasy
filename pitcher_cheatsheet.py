@@ -310,8 +310,17 @@ def merge_pitcherlist_rankings(merged, pl_active, pl_injured):
     return merged
 
 
+def _strip_pl_notes_from_eno_note(note):
+    """Remove ``PL IL: ...`` fragments from Eno Note (PL # holds IL rank ranges)."""
+    if not isinstance(note, str) or not note.strip():
+        return ''
+    parts = [p.strip() for p in note.split(';')]
+    parts = [p for p in parts if p and not p.startswith('PL IL:')]
+    return '; '.join(parts)
+
+
 def apply_pl_injured(merged, pl_injured):
-    """Append PL IL arms missing from projections and tag with PL relative rank."""
+    """Append PL IL arms missing from projections; rank range goes in ``pl_rank`` only."""
     if pl_injured is None or pl_injured.empty:
         return merged
 
@@ -330,24 +339,19 @@ def apply_pl_injured(merged, pl_injured):
     for _, row in pl_injured.iterrows():
         name = row['pl_name']
         rank_range = row['pl_rank_range']
-        injury = row.get('pl_injury', '')
         key = _normalize_pitcher_name(name)
         idx = name_to_idx.get(key)
         if idx is not None:
             if pd.isna(merged.at[idx, 'pl_rank']):
                 merged.at[idx, 'pl_rank'] = rank_range
-            existing_note = str(merged.at[idx, 'eno_note'] or '').strip()
-            pl_tag = f"PL IL: {injury} ({rank_range})" if injury else f"PL IL: ({rank_range})"
-            if pl_tag not in existing_note:
-                merged.at[idx, 'eno_note'] = (
-                    f"{existing_note}; {pl_tag}" if existing_note else pl_tag
-                )
+            merged.at[idx, 'eno_note'] = _strip_pl_notes_from_eno_note(
+                merged.at[idx, 'eno_note']
+            )
         else:
-            note = f"PL IL: {injury} ({rank_range})" if injury else f"PL IL: ({rank_range})"
             new_rows.append({
                 'PlayerName': name,
                 'pl_rank': rank_range,
-                'eno_note': note,
+                'eno_note': '',
             })
 
     if new_rows:
