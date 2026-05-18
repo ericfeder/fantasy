@@ -24,29 +24,6 @@ def load_projections(source):
     return df
 
 
-ACTUALS_2025_BATTING = 'data/2025/actuals/2025_batting_actuals.csv'
-
-
-def load_2025_batting_ppg():
-    """Compute empirical 2025 fantasy Pts/G per player from the FanGraphs
-    leaderboard CSV at ``ACTUALS_2025_BATTING``. Returns a DataFrame with
-    string ``playerid`` + ``ppg_2025`` formatted as ``"<ppg> (<G> G)"``,
-    or ``None`` if the file is missing.
-    """
-    if not os.path.exists(ACTUALS_2025_BATTING):
-        print(f"Warning: {ACTUALS_2025_BATTING} not found; skipping 2025 Pts/G column")
-        return None
-
-    df = pd.read_csv(ACTUALS_2025_BATTING)
-    df = df[df['G'].fillna(0) > 0].copy()
-    df = calculate_fantasy_points(df)
-    df['G'] = df['G'].astype(int)
-    ppg = (df['FantasyPoints'] / df['G']).round(1)
-    df['ppg_2025'] = [f"{p} ({g} G)" for p, g in zip(ppg, df['G'])]
-    df['playerid'] = df['playerid'].astype(str)
-    print(f"Loaded 2025 batting actuals for {len(df)} players")
-    return df[['playerid', 'ppg_2025']]
-
 def calculate_fantasy_points(df):
     """Calculate fantasy points for each player based on their stats."""
     # Define the scoring system
@@ -202,8 +179,7 @@ def create_batter_cheatsheet():
             df = df[df['AB'] > 0]
             # Calculate fantasy points
             df = calculate_fantasy_points(df)
-            # Keep only necessary columns, now including Games + playerid (for
-            # joining to 2025 actuals later).
+            # Keep only necessary columns, including projected games.
             df = df[['PlayerName', 'Team', 'playerid', 'G', 'FantasyPoints']].copy()
             df['playerid'] = df['playerid'].astype(str)
             # Round fantasy points to integers
@@ -265,13 +241,6 @@ def create_batter_cheatsheet():
         merged_df[ppg_col] = merged_df[ppg_col].replace([float('inf'), float('-inf')], 0)
         merged_df[ppg_col] = merged_df[ppg_col].fillna(0)
 
-    # Merge in empirical 2025 Pts/G (NaN for players without a 2025 line)
-    actuals_2025 = load_2025_batting_ppg()
-    if actuals_2025 is not None:
-        merged_df = merged_df.merge(actuals_2025, on='playerid', how='left')
-    else:
-        merged_df['ppg_2025'] = pd.NA
-
     # Load Yahoo positions
     yahoo_positions = load_yahoo_positions()
     
@@ -314,15 +283,15 @@ def create_batter_cheatsheet():
     # Select and reorder columns
     final_columns = [
         'PlayerName', 'YahooPositions',
-        'oopsy_ppg', 'thebatx_ppg', 'atc_ppg', 'ppg_2025',
-        'oopsy_points', 'thebatx_points', 'atc_points',
+        'oopsy_games',
+        'thebatx_ppg', 'oopsy_ppg', 'atc_ppg',
     ]
     final_columns = [c for c in final_columns if c in merged_df.columns]
     merged_df = merged_df[final_columns]
     
-    # Sort by RoS ATC points per game, breaking ties with THE BAT X then OOPSY points per game
+    # Sort by rounded Pts/G: THE BAT X, then OOPSY, then ATC
     merged_df = merged_df.sort_values(
-        ['atc_ppg', 'thebatx_ppg', 'oopsy_ppg'],
+        ['thebatx_ppg', 'oopsy_ppg', 'atc_ppg'],
         ascending=[False, False, False],
     )
     
@@ -330,13 +299,10 @@ def create_batter_cheatsheet():
     merged_df = merged_df.rename(columns={
         'PlayerName':     'Player',
         'YahooPositions': 'Position',
-        'atc_points':     'ATC Pts',
-        'oopsy_points':   'OOPSY Pts',
-        'thebatx_points': 'THE BAT X Pts',
+        'oopsy_games':    'Proj. G',
         'atc_ppg':        'ATC Pts/G',
         'oopsy_ppg':      'OOPSY Pts/G',
         'thebatx_ppg':    'THE BAT X Pts/G',
-        'ppg_2025':       '2025 Pts/G',
     })
 
     # Save to CSV
@@ -345,7 +311,7 @@ def create_batter_cheatsheet():
     print(f"Saved batter cheat sheet with {len(merged_df)} players to {output_file}")
     
     # Print top batters
-    print("\nTop batters by RoS ATC fantasy points:")
+    print("\nTop batters by THE BAT X Pts/G:")
     print(merged_df.head(10))
     
     # Print stats on position matching
