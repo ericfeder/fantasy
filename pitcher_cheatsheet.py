@@ -15,7 +15,7 @@ PL_INJURED_CACHE_PATH = 'data/2026/pitcherlist_injured.csv'
 # Nick Pollack's weekly top-100 SP list (active rotation only; IL arms omitted).
 PL_RANKINGS_URL = (
     'https://pitcherlist.com/top-100-starting-pitchers-for-2026-fantasy-baseball-'
-    '5-11-week-8-rankings/'
+    '5-18-week-9-rankings/'
 )
 
 SOURCES = ['thebatx', 'oopsy']
@@ -231,7 +231,8 @@ def fetch_pitcherlist_rankings(force_download=True):
             html = response.text
 
             pat = re.compile(
-                r'<strong>(\d+)\.\s*<a[^>]*class="player-tag"[^>]*>([^<]+)</a>',
+                r'<strong>(\d+)\.\s*<a[^>]*href="[^"]*pitcherlist\.com/player/[^"]*"[^>]*>'
+                r'([^<]+)</a>',
                 re.I,
             )
             active_rows = []
