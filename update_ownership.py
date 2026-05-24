@@ -280,7 +280,12 @@ def replace_conditional_formatting(svc, tab_name, sheet_id, status_col_idx,
     # red highlight to override the green "FA" / orange "Waivers" backgrounds,
     # so it's appended last on purpose.
     requests_payload.append(add_rule(f'=${sl}2="My Team"', background=CF_BG_MY_TEAM))
-    requests_payload.append(add_rule(f'=${sl}2="FA"', background=CF_BG_FA))
+    requests_payload.append(
+        add_rule(
+            f'=OR(${sl}2="FA",LEFT(${sl}2,3)="FA ")',
+            background=CF_BG_FA,
+        )
+    )
     requests_payload.append(add_rule(f'=LEFT(${sl}2,7)="Waivers"', background=CF_BG_WAIVERS))
     # Rostered (gray font): anything non-empty that isn't FA/FA-injured/Waivers/My Team.
     # Excluding `LEFT(${sl}2,3)="FA "` keeps "FA - IL15" out of the rostered bucket.

@@ -331,7 +331,9 @@ function applyStatusFormatting_(sheet, statusColIdx, numRows) {
     .build();
 
   var faRule = SpreadsheetApp.newConditionalFormatRule()
-    .whenFormulaSatisfied('=$' + statusColLetter + '2="FA"')
+    .whenFormulaSatisfied(
+      '=OR($' + statusColLetter + '2="FA",LEFT($' + statusColLetter + '2,3)="FA ")'
+    )
     .setBackground('#d9ead3')
     .setRanges([rowRange])
     .build();
@@ -347,6 +349,7 @@ function applyStatusFormatting_(sheet, statusColIdx, numRows) {
       '=AND(' +
         'LEN($' + statusColLetter + '2)>0,' +
         '$' + statusColLetter + '2<>"FA",' +
+        'LEFT($' + statusColLetter + '2,3)<>"FA ",' +
         'LEFT($' + statusColLetter + '2,7)<>"Waivers",' +
         '$' + statusColLetter + '2<>"My Team"' +
       ')'
