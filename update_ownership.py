@@ -24,7 +24,9 @@ import os
 import re
 import sys
 import unicodedata
+from collections import Counter
 
+from player_names import normalize_player_name, ownership_lookup_key, parse_disambiguated_name
 from upload_to_sheets import SPREADSHEET_ID, get_sheets_service
 from yahoo_client import (
     STATUS_FREEAGENT,
@@ -177,6 +179,45 @@ def ensure_status_column(svc, tab_name, sheet_id, header):
     return new_header, insert_idx, True
 
 
+def build_ownership_maps(players, *, value_key):
+    """Build a name -> value map, using team suffixes when names collide."""
+    name_counts = Counter(
+        normalize_player_name(p['name']) for p in players if p.get('name')
+    )
+    out = {}
+    for p in players:
+        if not p.get('name'):
+            continue
+        norm = normalize_player_name(p['name'])
+        team = p.get('editorial_team_abbr') or ''
+        key = ownership_lookup_key(p['name'], team if name_counts[norm] > 1 else None)
+        if value_key == 'owner_team':
+            out[key] = p.get('owner_team') or 'Rostered'
+        elif value_key == 'waiver_date':
+            out[key] = p.get('waiver_date') or True
+        else:
+            out[key] = p[value_key]
+    return out
+
+
+def lookup_player_value(player_name, value_map):
+    """Look up a player in an ownership map, handling duplicate names."""
+    key = ownership_lookup_key(player_name)
+    if key in value_map:
+        return value_map[key]
+
+    base_name, team = parse_disambiguated_name(player_name)
+    norm = normalize_player_name(base_name)
+    if team:
+        return value_map.get(f'{norm}|{team}')
+
+    prefix = f'{norm}|'
+    matches = [v for k, v in value_map.items() if k.startswith(prefix)]
+    if len(matches) == 1:
+        return matches[0]
+    return value_map.get(norm)
+
+
 def compute_status(player_name, taken_map, waiver_map, injury_map, my_team):
     """Compute the Status-column string for a single player.
 
@@ -187,15 +228,15 @@ def compute_status(player_name, taken_map, waiver_map, injury_map, my_team):
     hurt or in the minors. Healthy FA / Waiver players keep their plain
     label.
     """
-    norm = normalize_name(player_name)
+    norm = ownership_lookup_key(player_name)
     if not norm:
         return ''
-    owner = taken_map.get(norm)
+    owner = lookup_player_value(player_name, taken_map)
     if owner:
         return 'My Team' if my_team and owner == my_team else owner
-    injury = (injury_map.get(norm) or '').strip()
+    injury = (lookup_player_value(player_name, injury_map) or '').strip()
     suffix = f' - {injury}' if injury else ''
-    waiver = waiver_map.get(norm)
+    waiver = lookup_player_value(player_name, waiver_map)
     if waiver:
         if isinstance(waiver, str) and waiver:
             try:
@@ -392,19 +433,23 @@ def main():
               f"be available for waiver players.")
         free_agents = []
 
-    taken_map = {
-        normalize_name(p['name']): (p['owner_team'] or 'Rostered')
-        for p in taken if p['name']
-    }
-    waiver_map = {
-        normalize_name(p['name']): (p['waiver_date'] or True)
-        for p in waivers if p['name']
-    }
+    taken_map = build_ownership_maps(taken, value_key='owner_team')
+    waiver_map = build_ownership_maps(waivers, value_key='waiver_date')
+
+    injury_players = list(waivers) + list(free_agents)
+    injury_name_counts = Counter(
+        normalize_player_name(p['name']) for p in injury_players if p.get('name')
+    )
     injury_map = {}
-    for p in list(waivers) + list(free_agents):
+    for p in injury_players:
         if not p.get('name') or not p.get('status'):
             continue
-        injury_map.setdefault(normalize_name(p['name']), p['status'])
+        norm = normalize_player_name(p['name'])
+        team = p.get('editorial_team_abbr') or ''
+        key = ownership_lookup_key(
+            p['name'], team if injury_name_counts[norm] > 1 else None
+        )
+        injury_map.setdefault(key, p['status'])
     print(f"  Injury statuses available for {len(injury_map)} unowned players.")
 
     svc = get_sheets_service()

@@ -1,34 +1,11 @@
 import pandas as pd
 import requests
-import io
 import csv
 import os
-import re
-import unicodedata
 import argparse
+from collections import defaultdict
 
-def normalize_player_name(name):
-    """Normalize player name for better matching."""
-    if not isinstance(name, str):
-        return ""
-    
-    # Convert to lowercase
-    name = name.lower()
-    
-    # Remove accents and convert to ASCII
-    name = unicodedata.normalize('NFKD', name).encode('ASCII', 'ignore').decode('utf-8')
-    
-    # Remove suffixes like "Jr.", "Sr.", "III", etc.
-    name = re.sub(r'\s+(jr\.?|sr\.?|[ivx]+)$', '', name)
-    
-    # Remove parenthetical suffixes like (Batter), (Pitcher)
-    name = re.sub(r'\s+\([^)]+\)', '', name)
-    
-    # Remove special characters and extra spaces
-    name = re.sub(r'[^\w\s]', '', name)
-    name = re.sub(r'\s+', ' ', name).strip()
-    
-    return name
+from player_names import normalize_player_name
 
 def ensure_directories():
     """Ensure all required directories exist"""
@@ -86,48 +63,73 @@ def fetch_positions_from_google_sheet(force_download=True):
         # Print the column names to understand the structure
         print("Columns in the spreadsheet:", df.columns.tolist())
         
-        # Create a dictionary to store player positions
+        position_rows = []
         player_positions = {}
-        
-        # Extract player names and positions
+
         # Based on the observed structure, we need 'Full Name' and 'Position' columns
         if 'Full Name' in df.columns and 'Position' in df.columns:
             print("Found 'Full Name' and 'Position' columns in the spreadsheet")
-            
-            # Extract player names and positions
+
             for _, row in df.iterrows():
                 player_name = row.get('Full Name')
                 position = row.get('Position')
-                
-                # Skip if player name or position is NaN
+                team = row.get('Team') if 'Team' in df.columns else None
+
                 if pd.isna(player_name) or pd.isna(position):
                     continue
-                
-                # Convert to string if not already
+
                 if not isinstance(player_name, str):
                     player_name = str(player_name)
                 if not isinstance(position, str):
                     position = str(position)
-                
-                # Store both original and normalized versions of the name
-                player_positions[player_name] = position
-                
-                # Also store a normalized version for better matching
-                normalized_name = normalize_player_name(player_name)
-                player_positions[normalized_name] = position
-                
-                # Handle special cases
-                if "(Batter)" in player_name:
-                    # Remove the (Batter) suffix
-                    base_name = player_name.replace(" (Batter)", "")
-                    player_positions[base_name] = position
-                    player_positions[normalize_player_name(base_name)] = position
-            
-            print(f"Extracted positions for {len(player_positions)} entries from Yahoo positions data")
+                if pd.isna(team):
+                    team = ''
+                elif not isinstance(team, str):
+                    team = str(team)
+
+                position_rows.append({
+                    'name': player_name,
+                    'team': team,
+                    'position': position,
+                })
+
+            names_by_player = defaultdict(list)
+            for entry in position_rows:
+                names_by_player[entry['name']].append(entry)
+
+            for entry in position_rows:
+                name = entry['name']
+                team = entry['team']
+                position = entry['position']
+                norm = normalize_player_name(name)
+
+                if team:
+                    player_positions[(name, team)] = position
+                    player_positions[(norm, team)] = position
+
+                if len(names_by_player[name]) == 1:
+                    player_positions[name] = position
+                    player_positions[norm] = position
+
+                if "(Batter)" in name:
+                    base_name = name.replace(" (Batter)", "")
+                    base_norm = normalize_player_name(base_name)
+                    if team:
+                        player_positions[(base_name, team)] = position
+                        player_positions[(base_norm, team)] = position
+                    if len(names_by_player[name]) == 1:
+                        player_positions[base_name] = position
+                        player_positions[base_norm] = position
+
+            print(
+                f"Extracted positions for {len(position_rows)} players "
+                f"({len(names_by_player)} unique names) from Yahoo positions data"
+            )
         else:
             print("Could not find 'Full Name' and 'Position' columns in the spreadsheet")
             print("Available columns:", df.columns.tolist())
-        
+
+        player_positions['_rows'] = position_rows
         return player_positions
     
     except Exception as e:
@@ -136,25 +138,16 @@ def fetch_positions_from_google_sheet(force_download=True):
 
 def save_positions_to_csv(player_positions):
     """Save the player positions to a CSV file."""
-    # Ensure directories exist
     ensure_directories()
-    
-    # Count unique player names (excluding normalized versions)
-    unique_players = set()
-    for player in player_positions.keys():
-        # Only count names that don't look like normalized names
-        if any(c.isupper() for c in player) or any(c in player for c in "áéíóúüñÁÉÍÓÚÜÑ"):
-            unique_players.add(player)
-    
+
+    rows = player_positions.get('_rows', [])
     with open('data/positions/player_positions.csv', 'w', newline='', encoding='utf-8') as f:
         writer = csv.writer(f)
-        writer.writerow(['Player', 'Position'])
-        
-        # Only write original player names (not normalized versions)
-        for player in sorted(unique_players):
-            writer.writerow([player, player_positions[player]])
-    
-    print(f"Saved {len(unique_players)} player positions to data/positions/player_positions.csv")
+        writer.writerow(['Player', 'Team', 'Position'])
+        for entry in sorted(rows, key=lambda r: (r['name'], r['team'])):
+            writer.writerow([entry['name'], entry['team'], entry['position']])
+
+    print(f"Saved {len(rows)} player positions to data/positions/player_positions.csv")
 
 if __name__ == "__main__":
     # Parse command line arguments
@@ -173,18 +166,13 @@ if __name__ == "__main__":
     # Fetch the positions
     positions = fetch_positions_from_google_sheet(force_download=force_download)
     
-    # Count unique player names (excluding normalized versions)
-    unique_players = set()
-    for player in positions.keys():
-        # Only count names that don't look like normalized names
-        if any(c.isupper() for c in player) or any(c in player for c in "áéíóúüñÁÉÍÓÚÜÑ"):
-            unique_players.add(player)
-    
-    print(f"Fetched positions for {len(unique_players)} unique players")
-    
-    # Print a few examples
-    for i, player in enumerate(sorted(unique_players)[:20]):
-        print(f"{player}: {positions[player]}")
+    rows = positions.get('_rows', [])
+    print(f"Fetched positions for {len(rows)} players")
+
+    for entry in sorted(rows, key=lambda r: r['name'])[:20]:
+        team = entry['team']
+        suffix = f" ({team})" if team else ''
+        print(f"{entry['name']}{suffix}: {entry['position']}")
     
     # Save the positions to a CSV file
     save_positions_to_csv(positions) 

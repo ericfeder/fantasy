@@ -13,6 +13,8 @@ from google.oauth2 import service_account
 from googleapiclient.discovery import build
 from googleapiclient.errors import HttpError
 
+from player_names import ownership_lookup_key
+
 SPREADSHEET_ID = '1LRhXDU-cu66YVhGZWZeY9qi1187elU8lcFtS_jVgxXs'
 
 TABS = {
@@ -410,7 +412,7 @@ def read_status_column(tab_name):
             continue
         name, status = row[name_offset], row[status_offset]
         if name and status:
-            mapping[normalize_name(name)] = status
+            mapping[ownership_lookup_key(name)] = status
 
     print(f"  Saved {len(mapping)} existing Status values from {tab_name}")
     return mapping
@@ -488,8 +490,7 @@ def restore_status_column(tab_name, values, status_map):
     restored = 0
     for row in values[1:]:
         player_name = row[name_idx] if name_idx < len(row) else ''
-        norm = normalize_name(str(player_name))
-        status = status_map.get(norm, '')
+        status = status_map.get(ownership_lookup_key(str(player_name)), '')
         if status:
             restored += 1
         status_col.append([status])

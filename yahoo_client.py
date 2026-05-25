@@ -120,6 +120,7 @@ def parse_player(player_array):
     info_array = player_array[0]
     name, player_id, owner_team, waiver_date = '', '', '', ''
     status, status_full = '', ''
+    editorial_team_abbr = ''
     for item in info_array:
         if not isinstance(item, dict):
             continue
@@ -128,6 +129,8 @@ def parse_player(player_array):
             name = full or name
         if 'player_id' in item:
             player_id = str(item['player_id'])
+        if 'editorial_team_abbr' in item:
+            editorial_team_abbr = item['editorial_team_abbr'] or editorial_team_abbr
         if 'status' in item and isinstance(item['status'], str):
             status = item['status'] or status
         if 'status_full' in item and isinstance(item['status_full'], str):
@@ -146,6 +149,7 @@ def parse_player(player_array):
     return {
         'name': name,
         'player_id': player_id,
+        'editorial_team_abbr': editorial_team_abbr,
         'owner_team': owner_team,
         'waiver_date': waiver_date,
         'status': status,

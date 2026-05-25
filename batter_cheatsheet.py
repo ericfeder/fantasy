@@ -4,6 +4,8 @@ import csv
 import re
 import unicodedata
 
+from player_names import lookup_yahoo_position
+
 def ensure_directories():
     """Ensure all required directories exist"""
     directories = ['data', 'data/2026/projections', 'data/positions', 'data/output']
@@ -55,31 +57,48 @@ def load_yahoo_positions():
     if not os.path.exists(file_path):
         print(f"Warning: {file_path} does not exist")
         return {}
-    
+
     positions = {}
     with open(file_path, 'r', encoding='utf-8') as f:
         reader = csv.reader(f)
-        next(reader)  # Skip header
+        header = next(reader)
+        has_team = 'Team' in header
+        name_idx = header.index('Player')
+        team_idx = header.index('Team') if has_team else None
+        pos_idx = header.index('Position')
+
+        rows = []
         for row in reader:
-            if len(row) >= 2:
-                player_name = row[0]
-                position = row[1]
-                
-                # Store the original name
-                positions[player_name] = position
-                
-                # Also add a normalized version of the name for better matching
-                normalized_name = normalize_player_name(player_name)
-                positions[normalized_name] = position
-                
-                # Handle special cases
-                if "(Batter)" in player_name:
-                    # Remove the (Batter) suffix
-                    base_name = player_name.replace(" (Batter)", "")
-                    positions[base_name] = position
-                    positions[normalize_player_name(base_name)] = position
-    
-    print(f"Loaded positions for {len(positions)} unique players")
+            if len(row) <= pos_idx:
+                continue
+            player_name = row[name_idx]
+            position = row[pos_idx]
+            team = row[team_idx] if team_idx is not None and len(row) > team_idx else ''
+            rows.append((player_name, team, position))
+
+    names_by_player = {}
+    for player_name, team, position in rows:
+        names_by_player.setdefault(player_name, []).append((team, position))
+
+    for player_name, team, position in rows:
+        norm = normalize_player_name(player_name)
+        if team:
+            positions[(player_name, team)] = position
+            positions[(norm, team)] = position
+        if len(names_by_player[player_name]) == 1:
+            positions[player_name] = position
+            positions[norm] = position
+        if "(Batter)" in player_name:
+            base_name = player_name.replace(" (Batter)", "")
+            base_norm = normalize_player_name(base_name)
+            if team:
+                positions[(base_name, team)] = position
+                positions[(base_norm, team)] = position
+            if len(names_by_player[player_name]) == 1:
+                positions[base_name] = position
+                positions[base_norm] = position
+
+    print(f"Loaded positions for {len(rows)} players")
     return positions
 
 def normalize_player_name(name):
@@ -243,27 +262,23 @@ def create_batter_cheatsheet():
 
     # Load Yahoo positions
     yahoo_positions = load_yahoo_positions()
-    
-    # Add normalized player names for better matching
-    merged_df['NormalizedName'] = merged_df['PlayerName'].apply(normalize_player_name)
-    
-    # Add Yahoo positions to the dataframe
-    # First try exact match
-    merged_df['YahooPositions'] = merged_df['PlayerName'].map(yahoo_positions)
-    
-    # For players without positions, try normalized name match
-    mask = merged_df['YahooPositions'].isna()
-    merged_df.loc[mask, 'YahooPositions'] = merged_df.loc[mask, 'NormalizedName'].map(yahoo_positions)
-    
+
+    merged_df['YahooPositions'] = merged_df.apply(
+        lambda row: lookup_yahoo_position(
+            yahoo_positions, row['PlayerName'], row.get('Team')
+        ),
+        axis=1,
+    )
+
     # Special case handling for specific players
     for idx, row in merged_df.iterrows():
         if pd.isna(row['YahooPositions']) or row['YahooPositions'] == '':
             player_name = row['PlayerName']
-            
+
             # Handle José Ramírez specifically
             if player_name == 'José Ramírez':
                 merged_df.at[idx, 'YahooPositions'] = '3B'
-            
+
             # Handle Shohei Ohtani specifically
             elif player_name == 'Shohei Ohtani':
                 merged_df.at[idx, 'YahooPositions'] = 'Util'
@@ -276,10 +291,16 @@ def create_batter_cheatsheet():
     
     # Fill NaN values in YahooPositions
     merged_df['YahooPositions'] = merged_df['YahooPositions'].fillna('')
-    
-    # Drop the normalized name column as it's no longer needed
-    merged_df = merged_df.drop(columns=['NormalizedName'])
-    
+
+    dupe_mask = merged_df['PlayerName'].duplicated(keep=False)
+    if dupe_mask.any():
+        merged_df.loc[dupe_mask, 'PlayerName'] = (
+            merged_df.loc[dupe_mask, 'PlayerName']
+            + ' ('
+            + merged_df.loc[dupe_mask, 'Team'].astype(str)
+            + ')'
+        )
+
     # Select and reorder columns
     final_columns = [
         'PlayerName', 'YahooPositions',
