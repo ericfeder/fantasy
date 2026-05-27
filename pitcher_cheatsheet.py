@@ -15,7 +15,7 @@ PL_INJURED_CACHE_PATH = 'data/2026/pitcherlist_injured.csv'
 # Nick Pollack's weekly top-100 SP list (active rotation only; IL arms omitted).
 PL_RANKINGS_URL = (
     'https://pitcherlist.com/top-100-starting-pitchers-for-2026-fantasy-baseball-'
-    '5-18-week-9-rankings/'
+    '5-26-week-10-rankings/'
 )
 
 SOURCES = ['thebatx', 'oopsy']
@@ -173,6 +173,46 @@ def calculate_fantasy_points(df):
     return df
 
 
+def _parse_pl_active_ranks(html):
+    """Parse numbered top-100 entries from the PL article body."""
+    by_rank = {}
+
+    link_pat = re.compile(
+        r'<strong>(\d+)\.\s*<a[^>]*href="[^"]*pitcherlist\.com/player/[^"]*"[^>]*>'
+        r'([^<]+)</a>',
+        re.I,
+    )
+    plain_pat = re.compile(
+        r'<strong>(\d+)\.\s*([^<]+?)\s*\(([A-Z]{2,4})\)\s*(?:&#8211;|–|-)',
+        re.I,
+    )
+    split_pat = re.compile(
+        r'<strong>(\d+)\.\s*([^<]*)</strong><strong>([^<]+?)\s*\(([A-Z]{2,4})\)',
+        re.I,
+    )
+
+    for m in link_pat.finditer(html):
+        rank = int(m.group(1))
+        if 1 <= rank <= 100:
+            by_rank[rank] = m.group(2).strip()
+
+    for m in plain_pat.finditer(html):
+        rank = int(m.group(1))
+        if 1 <= rank <= 100 and rank not in by_rank:
+            by_rank[rank] = re.sub(r'\s+', ' ', m.group(2).strip())
+
+    for m in split_pat.finditer(html):
+        rank = int(m.group(1))
+        if 1 <= rank <= 100 and rank not in by_rank:
+            name = re.sub(r'\s+', ' ', (m.group(2) + m.group(3)).strip())
+            by_rank[rank] = name
+
+    return [
+        {'pl_rank': rank, 'pl_name': name}
+        for rank, name in sorted(by_rank.items())
+    ]
+
+
 def _parse_pl_injured_table(html):
     """Parse PL article table: Injured Pitchers Who Will Be Considered When Healthy."""
     marker = 'Injured Pitchers Who Will Be Considered When Healthy'
@@ -230,16 +270,7 @@ def fetch_pitcherlist_rankings(force_download=True):
             response.raise_for_status()
             html = response.text
 
-            pat = re.compile(
-                r'<strong>(\d+)\.\s*<a[^>]*href="[^"]*pitcherlist\.com/player/[^"]*"[^>]*>'
-                r'([^<]+)</a>',
-                re.I,
-            )
-            active_rows = []
-            for m in pat.finditer(html):
-                rank = int(m.group(1))
-                if 1 <= rank <= 100:
-                    active_rows.append({'pl_rank': rank, 'pl_name': m.group(2).strip()})
+            active_rows = _parse_pl_active_ranks(html)
             if len(active_rows) < 90:
                 raise ValueError(f"only parsed {len(active_rows)} PL ranks from article")
             pd.DataFrame(active_rows).drop_duplicates(subset=['pl_rank']).to_csv(
