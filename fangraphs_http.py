@@ -26,7 +26,7 @@ DEFAULT_TIMEOUT = 60
 IMPERSONATE_PROFILES = ('chrome131', 'chrome', 'chrome120', 'safari17_0', 'edge101')
 
 # Do not retry 403 — FanGraphs/Cloudflare blocks are not helped by backoff; callers
-# should fall back to another endpoint or cached CSV instead.
+# should fall back to another fetch method instead.
 _RETRYABLE_STATUS = {429, 500, 502, 503, 504}
 _RETRY_EXC = (
     TimeoutError,

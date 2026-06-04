@@ -4,21 +4,17 @@ FanGraphs blocks datacenter traffic (403 / Cloudflare). We try, in order:
 
 1. ``/api/projections`` JSON (same source the site uses for its table)
 2. Legacy HTML scrape (embedded React ``data`` array)
-3. Previously cached CSV on disk (for CI via actions/cache or local re-runs)
 """
 import json
 import os
 import re
-import time
 
 import pandas as pd
 
-from fangraphs_http import get_best_effort, get_with_retry
+from fangraphs_http import get_best_effort
 
 API_BASE = 'https://www.fangraphs.com/api/projections'
 DEFAULT_REFERER = 'https://www.fangraphs.com/projections'
-# Reuse cached CSVs when live fetch fails (covers transient 403 bursts).
-MAX_CACHE_AGE_HOURS = 72
 
 _HTML_DATA_RE = re.compile(r'{"data":\[(.+?)\],"dataUpdateCount":')
 _HTML_PLAYER_RE = re.compile(r'{"Team":"[^"]+".+?,"playerid":"[^"]+"}')
@@ -78,19 +74,6 @@ def fetch_rows_from_html(page_url):
     raise RuntimeError('could not find projection data in HTML')
 
 
-def load_cached_csv(csv_path, max_age_hours=MAX_CACHE_AGE_HOURS, *, allow_stale=False):
-    if not os.path.exists(csv_path):
-        return None
-    age_hours = (time.time() - os.path.getmtime(csv_path)) / 3600
-    if not allow_stale and age_hours > max_age_hours:
-        print(f"  Cached {csv_path} is too old ({age_hours:.1f}h > {max_age_hours}h)")
-        return None
-    df = pd.read_csv(csv_path)
-    stale_note = ' (stale fallback)' if allow_stale and age_hours > max_age_hours else ''
-    print(f"  Using cached {csv_path} ({len(df)} rows, {age_hours:.1f}h old){stale_note}")
-    return df
-
-
 def download_projections(label, fangraphs_type, stats, csv_path, page_url=None):
     """Fetch projections and write ``csv_path``. Returns DataFrame or None."""
     print(f"Scraping RoS {label} ({fangraphs_type}, {stats}) projections...")
@@ -111,17 +94,12 @@ def download_projections(label, fangraphs_type, stats, csv_path, page_url=None):
         except Exception as html_err:
             print(f"  HTML fetch failed: {html_err}")
 
-    if rows:
-        df = pd.DataFrame(rows)
-        os.makedirs(os.path.dirname(csv_path) or '.', exist_ok=True)
-        df.to_csv(csv_path, index=False)
-        print(f"Saved {len(df)} rows from RoS {label} via {source} to {csv_path}")
-        return df
+    if not rows:
+        print(f"ERROR: could not fetch {label} projections")
+        return None
 
-    # Committed CSVs / prior workflow cache — use even if old when live fetch is blocked.
-    cached = load_cached_csv(csv_path, allow_stale=True)
-    if cached is not None:
-        return cached
-
-    print(f"ERROR: could not fetch {label} projections and no usable cache at {csv_path}")
-    return None
+    df = pd.DataFrame(rows)
+    os.makedirs(os.path.dirname(csv_path) or '.', exist_ok=True)
+    df.to_csv(csv_path, index=False)
+    print(f"Saved {len(df)} rows from RoS {label} via {source} to {csv_path}")
+    return df
