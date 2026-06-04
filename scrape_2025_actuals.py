@@ -21,7 +21,8 @@ import re
 import sys
 
 import pandas as pd
-from curl_cffi import requests as cffi_requests
+
+from fangraphs_http import get_with_retry
 
 ACTUALS_DIR = 'data/2025/actuals'
 
@@ -82,8 +83,7 @@ def _extract_rows(html, label):
 
 def fetch_leaders(label, url):
     print(f"Scraping 2025 {label} actuals from FanGraphs...")
-    r = cffi_requests.get(url, impersonate='chrome', timeout=30)
-    r.raise_for_status()
+    r = get_with_retry(url, headers={'Referer': 'https://www.fangraphs.com/leaders'})
     rows = _extract_rows(r.text, label)
     df = pd.DataFrame(rows)
 

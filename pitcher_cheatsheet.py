@@ -588,16 +588,18 @@ def fetch_probable_starters():
 
     Returns {fg_player_id_str: [(date_obj, opp_abbrev, is_home), ...]}
     """
+    from fangraphs_http import get_with_retry
+
     url = "https://www.fangraphs.com/api/roster-resource/probables-grid/data"
-    headers = {
-        'User-Agent': 'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) '
-                       'AppleWebKit/537.36 (KHTML, like Gecko) '
-                       'Chrome/120.0.0.0 Safari/537.36',
-        'Accept': 'application/json',
-    }
     try:
-        resp = requests.get(url, headers=headers, timeout=15)
-        resp.raise_for_status()
+        resp = get_with_retry(
+            url,
+            timeout=15,
+            headers={
+                'Accept': 'application/json',
+                'Referer': 'https://www.fangraphs.com/roster-resource/probables-grid',
+            },
+        )
         payload = resp.json()
     except Exception as e:
         print(f"Error fetching probable starters: {e}")
