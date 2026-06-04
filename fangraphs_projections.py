@@ -13,7 +13,7 @@ import time
 
 import pandas as pd
 
-from fangraphs_http import get_with_retry
+from fangraphs_http import get_best_effort, get_with_retry
 
 API_BASE = 'https://www.fangraphs.com/api/projections'
 DEFAULT_REFERER = 'https://www.fangraphs.com/projections'
@@ -48,7 +48,7 @@ def _rows_from_api_payload(payload):
 
 def fetch_rows_from_api(stats, fangraphs_type):
     url = projections_api_url(stats, fangraphs_type)
-    response = get_with_retry(url, headers=_api_headers(stats, fangraphs_type))
+    response = get_best_effort(url, headers=_api_headers(stats, fangraphs_type))
     if 'json' not in (response.headers.get('content-type') or '').lower():
         if response.text.lstrip().startswith('<!'):
             raise RuntimeError('API returned HTML (likely Cloudflare challenge)')
@@ -56,7 +56,7 @@ def fetch_rows_from_api(stats, fangraphs_type):
 
 
 def fetch_rows_from_html(page_url):
-    response = get_with_retry(
+    response = get_best_effort(
         page_url,
         headers={'Referer': DEFAULT_REFERER},
     )
@@ -78,15 +78,16 @@ def fetch_rows_from_html(page_url):
     raise RuntimeError('could not find projection data in HTML')
 
 
-def load_cached_csv(csv_path, max_age_hours=MAX_CACHE_AGE_HOURS):
+def load_cached_csv(csv_path, max_age_hours=MAX_CACHE_AGE_HOURS, *, allow_stale=False):
     if not os.path.exists(csv_path):
         return None
     age_hours = (time.time() - os.path.getmtime(csv_path)) / 3600
-    if age_hours > max_age_hours:
+    if not allow_stale and age_hours > max_age_hours:
         print(f"  Cached {csv_path} is too old ({age_hours:.1f}h > {max_age_hours}h)")
         return None
     df = pd.read_csv(csv_path)
-    print(f"  Using cached {csv_path} ({len(df)} rows, {age_hours:.1f}h old)")
+    stale_note = ' (stale fallback)' if allow_stale and age_hours > max_age_hours else ''
+    print(f"  Using cached {csv_path} ({len(df)} rows, {age_hours:.1f}h old){stale_note}")
     return df
 
 
@@ -117,7 +118,8 @@ def download_projections(label, fangraphs_type, stats, csv_path, page_url=None):
         print(f"Saved {len(df)} rows from RoS {label} via {source} to {csv_path}")
         return df
 
-    cached = load_cached_csv(csv_path)
+    # Committed CSVs / prior workflow cache — use even if old when live fetch is blocked.
+    cached = load_cached_csv(csv_path, allow_stale=True)
     if cached is not None:
         return cached
 

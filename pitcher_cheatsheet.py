@@ -588,11 +588,11 @@ def fetch_probable_starters():
 
     Returns {fg_player_id_str: [(date_obj, opp_abbrev, is_home), ...]}
     """
-    from fangraphs_http import get_with_retry
+    from fangraphs_http import get_best_effort
 
     url = "https://www.fangraphs.com/api/roster-resource/probables-grid/data"
     try:
-        resp = get_with_retry(
+        resp = get_best_effort(
             url,
             timeout=15,
             headers={
